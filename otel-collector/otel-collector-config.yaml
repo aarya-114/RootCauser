@@ -1,0 +1,51 @@
+# =============================================================================
+# RootCauser — OpenTelemetry Collector Configuration
+# =============================================================================
+# Receives OTLP telemetry from the demo-service (and any future services),
+# batches it, and forwards it to SigNoz's built-in ingester over gRPC.
+#
+# SigNoz's ingester (signoz-ingester) accepts OTLP on:
+#   - gRPC  → port 4317
+#   - HTTP  → port 4318
+# Both are reachable via the Docker network alias "signoz-ingester".
+# =============================================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 5s
+
+exporters:
+  otlp:
+    endpoint: signoz-ingester:4317
+    tls:
+      insecure: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp]
