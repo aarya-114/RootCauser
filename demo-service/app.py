@@ -10,18 +10,23 @@ Endpoints:
     POST /checkout  → accepts a cart payload, returns a fake confirmation
 
 OpenTelemetry auto-instrumentation is enabled at startup via otel_config.py.
-NOTE: No bug / failure injection yet — that is wired in a later step.
+Bug injection:
+    Pass ``?inject_bug=slow_query`` to GET /orders or POST /checkout to
+    trigger a simulated slow database query.
+    Pass ``?inject_bug=flaky_downstream`` to GET /orders or POST /checkout
+    to trigger a simulated downstream payment-API timeout.
 """
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Query, status
 from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from otel_config import init_telemetry
+from bugs import slow_query, flaky_downstream
 
 # =============================================================================
 # App setup
@@ -117,19 +122,32 @@ def health_check():
 
 
 @app.get("/orders")
-def list_orders():
+def list_orders(
+    inject_bug: str | None = Query(default=None, description="Inject a named failure scenario."),
+):
     """Return the fake list of recent orders."""
+    if inject_bug == "slow_query":
+        slow_query.simulate_slow_query()
+    elif inject_bug == "flaky_downstream":
+        flaky_downstream.call_payment_api()
     return {"orders": FAKE_ORDERS, "count": len(FAKE_ORDERS)}
 
 
 @app.post("/checkout", response_model=CheckoutResponse, status_code=status.HTTP_201_CREATED)
-def checkout(cart: CheckoutRequest):
+def checkout(
+    cart: CheckoutRequest,
+    inject_bug: str | None = Query(default=None, description="Inject a named failure scenario."),
+):
     """
     Accept a cart and return a fake order confirmation.
 
     In a real system this would validate inventory, charge payment, etc.
     Here we just compute a total and return a generated order ID.
     """
+    if inject_bug == "slow_query":
+        slow_query.simulate_slow_query()
+    elif inject_bug == "flaky_downstream":
+        flaky_downstream.call_payment_api()
     total_cents = sum(item.price_cents * item.quantity for item in cart.items)
     order_id = f"ord-{uuid4().hex[:8]}"
 

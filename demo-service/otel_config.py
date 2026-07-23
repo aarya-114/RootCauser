@@ -9,6 +9,12 @@ Usage:
     Call ``init_telemetry()`` once at application startup (before any
     requests are served).  The function is idempotent — repeated calls
     are harmless.
+
+Reusable instances:
+    ``tracer`` — a :class:`opentelemetry.trace.Tracer` scoped to the service.
+    ``meter``  — a :class:`opentelemetry.metrics.Meter` scoped to the service.
+    Import these directly instead of calling ``get_tracer`` / ``get_meter``
+    in each module.
 """
 
 import os
@@ -33,6 +39,16 @@ _initialised = False
 
 # Service identity attached to every piece of telemetry
 SERVICE = "demo-service"
+
+# ---------------------------------------------------------------------------
+# Reusable tracer and meter — import these in other modules instead of
+# calling get_tracer() / get_meter() with ad-hoc names.
+# Both are lazily resolved against whichever provider is installed at
+# call time, so they work correctly even if init_telemetry() has not yet
+# been called (the SDK returns a no-op implementation in that case).
+# ---------------------------------------------------------------------------
+tracer = trace.get_tracer(SERVICE)
+meter = metrics.get_meter(SERVICE)
 
 
 def init_telemetry() -> None:
