@@ -18,15 +18,14 @@ Bug injection:
 """
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from uuid import uuid4
 
+from bugs import flaky_downstream, slow_query
 from fastapi import FastAPI, Query, status
-from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
 from otel_config import init_telemetry
-from bugs import slow_query, flaky_downstream
+from pydantic import BaseModel
+
 
 # =============================================================================
 # App setup
@@ -54,6 +53,7 @@ FastAPIInstrumentor.instrument_app(app)
 # =============================================================================
 class CartItem(BaseModel):
     """A single item in a checkout cart."""
+
     sku: str
     name: str
     quantity: int = 1
@@ -62,12 +62,14 @@ class CartItem(BaseModel):
 
 class CheckoutRequest(BaseModel):
     """Payload accepted by POST /checkout."""
+
     customer_email: str
     items: list[CartItem]
 
 
 class CheckoutResponse(BaseModel):
     """Confirmation returned after a successful checkout."""
+
     order_id: str
     status: str
     total_cents: int

@@ -1,0 +1,285 @@
+Below is how I’d explain RootCauser in a senior backend interview: crisp, defensible, and honest about what exists versus what is future work.
+
+**Executive Pitch**
+RootCauser is a local autonomous SRE copilot demo. It takes observability alerts from SigNoz, retrieves related traces/logs/metrics, builds a deterministic evidence bundle, asks an LLM for one root-cause hypothesis, validates that every citation actually exists in the evidence, and creates a GitHub Issue with the result. Slack notification is optional.
+
+**Problem Statement**
+When an incident fires, engineers lose time moving between dashboards, logs, traces, metrics, and ticketing. The first 10-20 minutes are often spent collecting context before anyone can form a grounded hypothesis.
+
+RootCauser exists to automate that first investigation pass. It does not “solve incidents”; it reduces time-to-context by turning an alert into an evidence-backed issue.
+
+**Architecture**
+The system has three major parts:
+
+1. `demo-service`: a FastAPI service that emits OpenTelemetry and has two explicit bug paths.
+2. Observability stack: OTel Collector forwards telemetry into SigNoz.
+3. `copilot-agent`: a FastAPI webhook receiver that investigates alerts and outputs a GitHub Issue.
+
+Flow:
+
+```text
+Demo Service -> OpenTelemetry -> OTel Collector -> SigNoz
+SigNoz Alert -> Copilot Webhook -> SigNoz Evidence Query
+Evidence -> Bundler -> LLM Reasoning -> Citation Verification
+Verified Hypothesis -> GitHub Issue -> Optional Slack
+```
+
+**Tech Stack**
+Python 3.11+, FastAPI, Docker Compose, OpenTelemetry SDK, OTel Collector, SigNoz, Pydantic, requests, pytest, Ruff, GitHub REST API, optional Slack Incoming Webhook, OpenAI-compatible chat completions.
+
+**Folder Structure**
+`demo-service/` contains the instrumented app and bug scenarios.  
+`otel-collector/` contains collector config.  
+`signoz-config/` contains SigNoz/ClickHouse configs mounted into containers.  
+`copilot-agent/` contains the autonomous investigation pipeline.  
+`copilot-agent/prompts/` contains prompt files, deliberately kept outside Python code.  
+`tests/` contains unit tests for deterministic logic.  
+`docs/` contains architecture, setup, alert, demo, roadmap, and failure docs.  
+`.github/workflows/` contains CI.
+
+**Important Files**
+`demo-service/app.py`: FastAPI endpoints `/health`, `/orders`, `/checkout`, and bug dispatch through `inject_bug`.  
+`demo-service/otel_config.py`: initializes trace, metric, and log exporters.  
+`demo-service/bugs/slow_query.py`: emits slow span, warning log, and `db.query.duration`.  
+`demo-service/bugs/flaky_downstream.py`: emits errored downstream span, error log, and `downstream.errors`.  
+`otel-collector/otel-collector-config.yaml`: receives OTLP and exports to SigNoz.  
+`copilot-agent/main.py`: webhook receiver and background pipeline orchestration.  
+`copilot-agent/mcp_client.py`: stable evidence-query interface using SigNoz REST fallback.  
+`copilot-agent/evidence_bundler.py`: deterministic ranking and normalization of evidence.  
+`copilot-agent/reasoning.py`: one LLM call, JSON parsing, citation verification, confidence scoring.  
+`copilot-agent/github_output.py`: renders issue Markdown, writes local artifact, creates GitHub Issue if configured.  
+`copilot-agent/slack_output.py`: optional Slack message after GitHub Issue creation.  
+`tests/test_evidence_bundler.py`: tests ranking, truncation, empty/partial evidence.  
+`tests/test_reasoning_parsing.py`: tests JSON parsing, invalid citation rejection, confidence logic.
+
+**Request Lifecycle**
+An alert arrives at `POST /webhook/alert`. The agent logs the raw payload, optionally validates `X-Rootcauser-Secret`, returns `{"status":"accepted"}`, and runs investigation in the background. It extracts service name and time window, queries SigNoz for traces/logs/metrics, builds an `EvidenceBundle`, calls the LLM once, validates citations, renders a GitHub issue, optionally sends Slack, and logs completion.
+
+**MCP Integration**
+The project intended MCP-first SigNoz access. During investigation, the local SigNoz endpoint `/mcp` returned frontend HTML, not an MCP protocol response. Per the architecture decision, the agent uses a REST fallback while preserving the same interface: `query_traces`, `query_logs`, `query_metrics`, `get_alert_details`. This keeps downstream code insulated from whether the backend is true MCP or REST.
+
+**Evidence Bundling**
+The bundler is deterministic and pure. It selects top spans by error/duration, top logs by trace correlation and severity, and metric series with min/max/anomaly point. This matters because the LLM should reason over curated evidence, not raw noisy telemetry.
+
+**Citation Verification**
+This is the core safety mechanism. The LLM must return strict JSON with `summary`, `cited_ids`, `suggested_fix`, and `insufficient_evidence`. Every cited ID must literally exist in the serialized evidence bundle. If JSON parsing fails, the model says insufficient evidence, or any citation is unverifiable, the final answer becomes `Insufficient Evidence`.
+
+**GitHub Integration**
+`github_output.py` always renders a local Markdown artifact first. If `GITHUB_TOKEN` and `GITHUB_REPO` are configured, it calls the GitHub Issues API with one retry. If GitHub is not configured, the local artifact is still available for demo/debugging.
+
+**Slack Integration**
+Slack is optional. It only sends after GitHub succeeds because the Slack message includes the issue URL. If `SLACK_WEBHOOK_URL` is missing, it is a no-op. Slack failure does not break the main pipeline.
+
+**Testing Strategy**
+The project avoids live dependency tests. Unit tests focus on deterministic logic: evidence bundling and reasoning validation. This is intentional: CI should not require SigNoz, LLM keys, GitHub tokens, or Slack webhooks. Manual scripts exist for live SigNoz and reasoning smoke tests.
+
+**Design Decisions**
+Modular monolith for the agent.  
+No database in MVP.  
+Exactly one LLM call per incident.  
+Prompts stored as files.  
+One retry per external call.  
+Two seeded failures only.  
+Citation verification is mandatory.  
+REST fallback is used because MCP was not available locally.
+
+**Trade-Offs**
+The system is simple and demoable, but not fully productionized. Statelessness avoids operational complexity, but prevents deduplication and durable job tracking. One LLM call is predictable and cheaper, but less flexible than agentic multi-step reasoning. Literal citation matching is conservative, but may reject useful answers with formatting differences.
+
+**Limitations**
+Alert rules are documented, not automatically provisioned. Webhook payload parsing uses heuristics. No issue deduplication. No durable investigation history. No queue. No multi-service correlation. SigNoz query shapes may need hardening against version changes. Slack is only a notification output, not an interaction surface.
+
+**Production Improvements**
+Add alert provisioning scripts. Add durable job state. Add idempotency and deduplication. Add queue-based background processing. Add mocked integration tests for the webhook pipeline. Add real MCP support when available. Add better SigNoz deep links. Add ownership routing. Add rate limiting. Add structured logs and metrics for the agent itself.
+
+**Security**
+Current security is MVP-level. Secrets live in `.env`. Webhook can use a shared secret header. GitHub and Slack tokens are environment-driven. Production should add signed webhooks, scoped service accounts, secret rotation, audit logs, request size limits, egress controls, and stricter validation of alert payloads.
+
+**Scalability**
+Current design handles a local demo and low incident volume. For production, the webhook should enqueue jobs, workers should process investigations, deduplication should prevent issue spam, and evidence retrieval should be bounded by time windows, pagination, rate limits, and concurrency controls.
+
+---
+
+## 30 Likely Interview Questions With Ideal Answers
+
+1. **What problem does this solve?**  
+It automates the first investigation pass after an observability alert by gathering evidence and producing a grounded GitHub Issue.
+
+2. **Why SigNoz?**  
+It provides traces, logs, metrics, and alerting in one local stack, which makes correlation possible.
+
+3. **Why FastAPI?**  
+The project is Python-based, and FastAPI is lightweight, typed, async-friendly, and easy to containerize.
+
+4. **Why OpenTelemetry?**  
+It is vendor-neutral and lets the demo service emit standard traces, logs, and metrics.
+
+5. **Why no database?**  
+The MVP is stateless by design to keep scope small and reduce operational complexity.
+
+6. **What are the seeded bugs?**  
+A slow DB query simulation and a downstream payment API timeout simulation.
+
+7. **How is the slow query represented?**  
+A span named `db.orders.slow_query`, warning log, and `db.query.duration` metric.
+
+8. **How is downstream timeout represented?**  
+An errored span named `downstream.payment_api.call`, error log, and `downstream.errors` metric.
+
+9. **What does the agent do when an alert arrives?**  
+It accepts the webhook, starts background processing, retrieves evidence, reasons, validates citations, and outputs an issue.
+
+10. **Why background processing?**  
+To return quickly to SigNoz and avoid webhook timeout while LLM/GitHub calls run.
+
+11. **What is the MCP story?**  
+The interface is MCP-shaped, but the current implementation uses SigNoz REST fallback because local MCP was unavailable.
+
+12. **What is evidence bundling?**  
+A deterministic step that ranks and structures traces, logs, and metrics before sending them to the LLM.
+
+13. **Why not send raw telemetry directly to the LLM?**  
+Raw telemetry is noisy, expensive, and harder to validate.
+
+14. **How do you prevent hallucinations?**  
+Every cited ID from the LLM must literally exist in the evidence bundle.
+
+15. **What happens if the LLM returns bad JSON?**  
+The system returns `Insufficient Evidence`.
+
+16. **How is confidence calculated?**  
+Rule-based: span plus metric is High, one signal type is Medium, weak accepted evidence is Low.
+
+17. **Why rule-based confidence?**  
+It is predictable and avoids trusting the LLM to grade itself.
+
+18. **How does GitHub integration work?**  
+It renders issue Markdown, writes a local artifact, then calls GitHub Issues API if configured.
+
+19. **What happens without GitHub credentials?**  
+No crash; the local Markdown artifact is still written.
+
+20. **How does Slack work?**  
+It sends a short notification only if Slack is configured and a GitHub Issue URL exists.
+
+21. **What is tested?**  
+Evidence bundling and reasoning parsing/citation validation.
+
+22. **Why no live integration tests?**  
+CI should run without SigNoz, LLM, GitHub, or Slack credentials.
+
+23. **What are the main services in Docker Compose?**  
+SigNoz stack, OTel collector, demo service, and copilot agent.
+
+24. **What ports are exposed?**  
+SigNoz `8080`, demo service `8000`, copilot agent `8001`, OTLP `4317/4318`.
+
+25. **How do you trigger a bug?**  
+Use `?inject_bug=slow_query` or `?inject_bug=flaky_downstream`.
+
+26. **How do you know telemetry worked?**  
+Check SigNoz for spans/logs/metrics and collector logs for export errors.
+
+27. **What is the most important reliability guardrail?**  
+Citation verification before accepting LLM output.
+
+28. **What is the biggest MVP limitation?**  
+No durable state or automatic alert provisioning.
+
+29. **What would you productionize first?**  
+Webhook validation, job queue, alert provisioning, deduplication, and stronger tests.
+
+30. **What makes this backend-engineering relevant?**  
+It combines service instrumentation, distributed tracing, async processing, external APIs, validation, Docker orchestration, and failure-mode design.
+
+## 30 Difficult Follow-Up Questions With Ideal Answers
+
+1. **What if the LLM cites a valid ID but draws the wrong conclusion?**  
+Citation validation proves grounding, not correctness. Production would add deterministic heuristics, confidence thresholds, and human review.
+
+2. **Is literal substring citation validation too strict?**  
+Yes, deliberately. It reduces false trust. Later we could normalize IDs and validate against structured indexes.
+
+3. **How would you avoid duplicate GitHub Issues?**  
+Create an incident fingerprint from alert name, service, metric, and time bucket, then search/update existing issues.
+
+4. **Why not use Celery or Redis?**  
+MVP scope avoids infrastructure. For production, a queue would be appropriate.
+
+5. **What happens if two alerts arrive simultaneously?**  
+FastAPI can accept them, but there is no deduplication or concurrency control beyond normal background execution.
+
+6. **Could GitHub API failure lose the result?**  
+The rendered local artifact is written before the API call, so the investigation output is preserved locally.
+
+7. **What if SigNoz query API changes?**  
+`mcp_client.py` isolates that risk. Tests should be added around query payloads and response parsing.
+
+8. **Why one retry only?**  
+The handbook locks this MVP behavior. It keeps failure behavior predictable.
+
+9. **Why not exponential backoff?**  
+For production, yes. For the MVP, fixed retry keeps latency bounded for demos.
+
+10. **How would you secure the webhook?**  
+Signed payloads, shared secret rotation, allowlisted source, TLS, request size limits, replay protection.
+
+11. **How would you scale investigations?**  
+Webhook enqueues jobs, workers process them, results are stored durably, and concurrency/rate limits protect SigNoz and LLM APIs.
+
+12. **How do you bound LLM cost?**  
+Limit evidence size, top-N ranking, one call per incident, and strict prompt templates.
+
+13. **What if telemetry volume is huge?**  
+Query narrow time windows, paginate, pre-aggregate metrics, and rank before LLM input.
+
+14. **What if the alert payload lacks service name?**  
+Current code defaults to `demo-service`. Production should reject or enrich incomplete payloads.
+
+15. **Is defaulting to `demo-service` dangerous?**  
+In production, yes. In this local MVP, it supports a single-service demo.
+
+16. **Why separate demo-service and copilot-agent?**  
+They are separate deployables: one is the observed system, one is the investigator.
+
+17. **Why prompts as files?**  
+Versioning and review. Prompt changes become visible code changes.
+
+18. **How would you test GitHub integration safely?**  
+Mock the API in unit tests and use a sandbox repo for manual integration tests.
+
+19. **How would you test Slack safely?**  
+Mock `requests.post` and separately test a real webhook only in a controlled channel.
+
+20. **What is the failure mode if Slack fails?**  
+It returns without raising after retry; GitHub output remains the primary result.
+
+21. **Why use Pydantic models?**  
+They make evidence and hypothesis structures explicit, validated, and testable.
+
+22. **Could the evidence bundler hide important data?**  
+Yes. Top-5 ranking is a trade-off. Production could include adaptive ranking or attached raw evidence.
+
+23. **What if logs and traces are not correlated?**  
+The bundler also ranks by severity, so ERROR/WARN logs can still be included.
+
+24. **What if metrics are missing but traces exist?**  
+The bundle is still usable, and confidence would likely be Medium instead of High.
+
+25. **Why no vector DB?**  
+The MVP investigates bounded incident windows, not long-term semantic memory.
+
+26. **How would you add multi-service incidents?**  
+Extract service graph/topology, query upstream/downstream services, and bundle cross-service evidence.
+
+27. **What observability does the agent itself have?**  
+Currently basic logs. Production should instrument the agent with OTel too.
+
+28. **What is the most brittle part?**  
+SigNoz query response shape and alert payload parsing.
+
+29. **What would you refactor next?**  
+Make `copilot-agent` a proper Python package instead of relying on path-based imports.
+
+30. **How would you summarize the project’s value?**  
+It demonstrates a safe pattern for LLM-assisted incident response: deterministic evidence collection first, constrained reasoning second, verified citations before action.

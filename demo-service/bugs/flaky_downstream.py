@@ -13,7 +13,7 @@ Telemetry produced:
 import logging
 import time
 
-from opentelemetry import trace, metrics
+from opentelemetry import metrics, trace
 from opentelemetry.trace import StatusCode
 
 logger = logging.getLogger(__name__)

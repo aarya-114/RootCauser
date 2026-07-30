@@ -16,6 +16,7 @@
 #   4317  → OTLP gRPC ingestion
 #   4318  → OTLP HTTP ingestion
 #   8000  → Demo Service (order/checkout API)
+#   8001  → Copilot Agent (alert webhook receiver)
 #
 # Prerequisites:
 #   - Docker Engine 20.10+ with Compose v2 plugin
@@ -285,13 +286,17 @@ services:
   # ---------------------------------------------------------------------------
   # Demo Service — fake order/checkout FastAPI app.
   # This is the "target application" that the RootCauser copilot monitors.
-  # No OTel instrumentation yet (Step 4) and no bug injection yet (later step).
   # ---------------------------------------------------------------------------
   demo-service:
     build:
       context: ./demo-service
       dockerfile: Dockerfile
     container_name: rootcauser-demo-service
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     healthcheck:
       test:
         - CMD
@@ -306,4 +311,44 @@ services:
       - signoz-network
     ports:
       - "8000:8000"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Copilot Agent — receives SigNoz alert webhooks and creates GitHub issues.
+  # ---------------------------------------------------------------------------
+  copilot-agent:
+    build:
+      context: ./copilot-agent
+      dockerfile: Dockerfile
+    container_name: rootcauser-copilot-agent
+    depends_on:
+      demo-service:
+        condition: service_healthy
+      signoz-signoz-0:
+        condition: service_healthy
+    environment:
+      - SIGNOZ_BASE_URL=http://signoz-signoz-0:8080
+      - SIGNOZ_MCP_ENDPOINT=http://signoz-signoz-0:8080/mcp
+      - SIGNOZ_PUBLIC_URL=http://localhost:8080
+      - SIGNOZ_API_KEY=${SIGNOZ_API_KEY:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-gpt-4o-mini}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_REPO=${GITHUB_REPO:-your-org/your-repo}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - WEBHOOK_SHARED_SECRET=${WEBHOOK_SHARED_SECRET:-}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - signoz-network
+    ports:
+      - "8001:8001"
     restart: unless-stopped
