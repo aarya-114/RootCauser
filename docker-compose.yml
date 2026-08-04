@@ -293,8 +293,8 @@ services:
       dockerfile: Dockerfile
     container_name: rootcauser-demo-service
     depends_on:
-      otel-collector:
-        condition: service_healthy
+    - otel-collector
+        # condition: service_healthy
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
     healthcheck:
