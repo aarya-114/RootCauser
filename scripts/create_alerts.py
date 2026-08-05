@@ -1,18 +1,7 @@
-import json
-import os
-import requests
+from signoz.client import SignozClient
 
-BASE_URL = os.environ["SIGNOZ_BASE_URL"]
-API_KEY = os.environ["SIGNOZ_API_KEY"]
+client = SignozClient()
 
-headers = {
-    "SIGNOZ-API-KEY": API_KEY,
-}
+rules = client.get("/api/v1/rules")
 
-response = requests.get(
-    f"{BASE_URL}/api/v1/rules",
-    headers=headers,
-)
-
-print(response.status_code)
-print(json.dumps(response.json(), indent=2))
+print(rules)
