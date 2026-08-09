@@ -31,12 +31,11 @@ Current MVP limitation:
 
 ## Technical Debt
 
-### Stabilize SigNoz REST Query Shapes
+### Monitor SigNoz REST Query Shape Changes
 
-- Why it is needed: SigNoz API response shapes can vary by version and query type.
-- Current limitation: `mcp_client.py` uses pragmatic extraction helpers for expected list and time-series responses.
-- Estimated complexity: Medium.
-- Priority: High.
+- Current implementation: `mcp_client.py` normalizes nested raw records and metric series from `POST /api/v5/query_range` and logs unsupported response shapes.
+- Remaining limitation: future SigNoz versions may introduce new response variants that need explicit normalization coverage.
+- Priority: Medium.
 
 ### Replace Import Path Workarounds
 

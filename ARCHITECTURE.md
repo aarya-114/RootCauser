@@ -75,3 +75,6 @@ The agent is stateless. Local Markdown issue artifacts are written only as a dem
 ## Non-Negotiable Guardrail
 
 Every LLM-produced citation must be verified against the evidence bundle. If any cited trace ID, span ID, or metric name is absent, the hypothesis is rejected and returned as `Insufficient Evidence`.
+## Evidence retrieval and grounding
+
+The agent uses SigNoz REST `POST /api/v5/query_range` for raw traces/logs and time-series metrics. A production alert rule UUID is resolved with `GET /api/v2/rules/{uuid}` (not the old numeric v1 route). Rule metrics, composite query, threshold, and alert name guide deterministic evidence ranking. Health/readiness/liveness spans are deprioritized; matching operation names, service, errors, duration, and trace/log correlation are prioritized. OpenRouter is the reasoning provider, configured by `LLM_MODEL_NAME`; strict citation validation gates GitHub Issue and Slack delivery.

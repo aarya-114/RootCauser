@@ -46,3 +46,5 @@ The REST API is available and functioning correctly.
 No usable MCP endpoint or documented MCP tool schema was found in the local SigNoz deployment.
 
 Following ADR-04, RootCauser will use SigNoz's HTTP REST API for evidence retrieval while preserving an MCP-compatible interface inside `mcp_client.py` for future replacement.
+
+The implemented REST endpoints are `POST /api/v5/query_range` for traces, logs, and metrics and `GET /api/v2/rules/{uuid}` for alert-rule context. Rule identifiers are UUIDs; numeric `/api/v1/rules/{id}` lookup is not supported.

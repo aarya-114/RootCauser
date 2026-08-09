@@ -33,15 +33,15 @@ What should happen:
 
 Required for the full autonomous flow:
 
-- `LLM_API_KEY`: API key for the OpenAI-compatible chat completions call.
-- `LLM_MODEL_NAME`: model name, for example `gpt-4o-mini`.
+- `LLM_API_KEY`: API key for the OpenRouter chat completions call.
+- `LLM_MODEL_NAME`: OpenRouter model name.
 - `GITHUB_TOKEN`: GitHub personal access token for issue creation.
 - `GITHUB_REPO`: target repo in `owner/repo` format.
 
 Optional or locally defaulted:
 
 - `OTEL_EXPORTER_OTLP_ENDPOINT`: defaults to the collector endpoint in Docker.
-- `SIGNOZ_MCP_ENDPOINT`: documented MCP endpoint; current implementation uses REST fallback.
+- `SIGNOZ_MCP_ENDPOINT`: retained configuration; evidence retrieval uses SigNoz REST `POST /api/v5/query_range`.
 - `SIGNOZ_BASE_URL`: SigNoz API base URL.
 - `SIGNOZ_API_KEY`: optional SigNoz API key if required.
 - `SIGNOZ_PUBLIC_URL`: URL rendered into issue trace links.
@@ -211,6 +211,18 @@ What should happen:
 - Early SigNoz startup can take time because ClickHouse and migrations must initialize.
 
 ## Verification Commands
+
+### Manual end-to-end alert smoke test
+
+Start the stack with `docker compose up -d --build`, wait for `http://localhost:8001/health`, then send:
+
+```powershell
+$now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$body = @{ alertname = "manual slow query test"; labels = @{ serviceName = "demo-service" }; startsAt = $now } | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri "http://localhost:8001/webhook/alert" -Method POST -ContentType "application/json" -Body $body
+```
+
+Generate slow-query traffic in the same incident window first. Agent logs should show relevant `db.orders.slow_query` / `GET /orders` evidence when present, real metric point counts, the LLM result state, and the GitHub URL. Manual alerts have no rule UUID; SigNoz production payloads with a UUID additionally use `GET /api/v2/rules/{uuid}`.
 
 Run unit tests:
 

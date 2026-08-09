@@ -50,6 +50,8 @@ flowchart TB
 
 ## Component Interaction
 
+The SigNoz client uses REST `POST /api/v5/query_range`; rule lookup is `GET /api/v2/rules/{uuid}` where the identifier is a UUID. The bundler normalizes nested `data` records and deterministically ranks incident-relevant evidence before the OpenRouter call. OpenRouter uses `https://openrouter.ai/api/v1/chat/completions` and the configurable `LLM_MODEL_NAME`. Citation validation prevents unsupported claims from reaching GitHub or Slack.
+
 1. `demo-service` receives normal or bug-injected API traffic.
 2. `demo-service/otel_config.py` initializes OpenTelemetry providers.
 3. `otel-collector` receives OTLP telemetry from the demo service.
@@ -188,7 +190,7 @@ The client queries SigNoz for traces, logs, metrics, and optional alert-rule det
 
 - Returns insufficient evidence immediately if the bundle is empty.
 - Loads prompts from `copilot-agent/prompts/`.
-- Calls an OpenAI-compatible chat completions endpoint once when `LLM_API_KEY` is configured.
+- Calls OpenRouter `https://openrouter.ai/api/v1/chat/completions` once with the configured `LLM_MODEL_NAME` when `LLM_API_KEY` is configured.
 - Retries the LLM call once on failure.
 - Parses the response into `RootCauseHypothesis`.
 

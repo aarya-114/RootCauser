@@ -1,28 +1,4 @@
-"""
-RootCauser MCP Client — ADR-04 REST Fallback
-=============================================
-Investigation Summary
----------------------
-The local self-hosted SigNoz (v0.134.0) deployment does not expose a usable
-MCP endpoint. Requests to /mcp return the frontend HTML rather than an MCP
-protocol response.
-
-Per ADR-04, this client uses the documented SigNoz REST API internally while
-preserving the same public interface so that a future migration to a real MCP
-server requires no downstream changes.
-
-Public API
-----------
-    query_traces(service_name, start_time, end_time, min_duration_ms=None)
-    query_logs(service_name, start_time, end_time, severity=None)
-    query_metrics(service_name, metric_name, start_time, end_time)
-    get_alert_details(alert_id)
-
-Configuration (environment variables)
---------------------------------------
-    SIGNOZ_BASE_URL   Base URL of the SigNoz instance, e.g. http://localhost:8080
-    SIGNOZ_API_KEY    Service-account API key generated in SigNoz Settings
-"""
+"""SigNoz REST client used by the RootCauser investigation pipeline."""
 
 from __future__ import annotations
 
@@ -33,113 +9,70 @@ from datetime import datetime
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
-# ---------------------------------------------------------------------------
-# Configuration — read once at import time so callers do not need to pass
-# credentials on every call.
-# ---------------------------------------------------------------------------
-_BASE_URL: str = os.environ.get("SIGNOZ_BASE_URL", "http://localhost:8080").rstrip("/")
-_API_KEY: str = os.environ.get("SIGNOZ_API_KEY", "")
-
-# Retry policy
-_RETRY_DELAY_SECONDS: float = 2.0
-
-# SigNoz v5 query endpoint (composite query builder)
-_QUERY_RANGE_URL: str = f"{_BASE_URL}/api/v5/query_range"
-
-# SigNoz v1 alert-rules endpoint
-_RULES_URL: str = f"{_BASE_URL}/api/v1/rules"
+_BASE_URL = os.environ.get("SIGNOZ_BASE_URL", "http://localhost:8080").rstrip("/")
+_API_KEY = os.environ.get("SIGNOZ_API_KEY", "")
+_QUERY_RANGE_URL = f"{_BASE_URL}/api/v5/query_range"
+_RULES_URL = f"{_BASE_URL}/api/v2/rules"
+_RETRY_DELAY_SECONDS = 2.0
 
 
 def _headers() -> dict[str, str]:
-    """Return HTTP headers required by the SigNoz REST API."""
-    h: dict[str, str] = {"Content-Type": "application/json", "Accept": "application/json"}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
     if _API_KEY:
-        h["SIGNOZ-API-KEY"] = _API_KEY
-    return h
+        headers["SIGNOZ-API-KEY"] = _API_KEY
+    return headers
 
 
 def _to_epoch_ms(dt: datetime | int | float) -> int:
-    """
-    Normalise *dt* to an integer Unix timestamp in milliseconds.
-
-    Accepts:
-        - a timezone-aware ``datetime`` object
-        - a numeric Unix timestamp in seconds (int or float)
-        - an integer already in milliseconds (detected when > 1e12)
-    """
     if isinstance(dt, datetime):
         return int(dt.timestamp() * 1000)
-    numeric = float(dt)
-    # Heuristic: values larger than 1e12 are already in milliseconds
-    return int(numeric) if numeric > 1e12 else int(numeric * 1000)
+    value = float(dt)
+    return int(value if value > 1e12 else value * 1000)
 
 
 def _post_with_retry(url: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    POST *payload* to *url*, retrying once after ``_RETRY_DELAY_SECONDS`` on
-    any connection or HTTP error.
-
-    Returns:
-        Parsed JSON response as a Python dict.
-
-    Raises:
-        requests.HTTPError: if both attempts fail with a non-2xx status code.
-        requests.ConnectionError / requests.Timeout: if both attempts raise a
-            network-level error.
-    """
     for attempt in (1, 2):
         try:
             response = requests.post(url, json=payload, headers=_headers(), timeout=30)
+            if response.status_code >= 400:
+                logger.error(
+                    "SigNoz POST failed: status=%s body=%s", response.status_code, response.text
+                )
             response.raise_for_status()
             return response.json()
         except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
             if attempt == 1:
-                logger.warning(
-                    "SigNoz POST %s failed (attempt %d/2): %s — retrying in %.0fs",
-                    url,
-                    attempt,
-                    exc,
-                    _RETRY_DELAY_SECONDS,
-                )
+                logger.warning("SigNoz POST failed (attempt 1/2): %s; retrying", exc)
                 time.sleep(_RETRY_DELAY_SECONDS)
-            else:
-                logger.error("SigNoz POST %s failed on both attempts: %s", url, exc)
-                raise
+                continue
+            logger.error("SigNoz POST failed on both attempts: %s", exc)
+            raise
+    raise RuntimeError("Unexpected retry state")
 
 
 def _get_with_retry(url: str) -> dict[str, Any]:
-    """
-    GET *url*, retrying once after ``_RETRY_DELAY_SECONDS`` on any error.
-
-    Returns:
-        Parsed JSON response as a Python dict.
-    """
     for attempt in (1, 2):
         try:
             response = requests.get(url, headers=_headers(), timeout=30)
+            if response.status_code >= 400:
+                logger.error(
+                    "SigNoz GET failed: status=%s body=%s", response.status_code, response.text
+                )
             response.raise_for_status()
             return response.json()
         except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
             if attempt == 1:
-                logger.warning(
-                    "SigNoz GET %s failed (attempt %d/2): %s — retrying in %.0fs",
-                    url,
-                    attempt,
-                    exc,
-                    _RETRY_DELAY_SECONDS,
-                )
+                logger.warning("SigNoz GET failed (attempt 1/2): %s; retrying", exc)
                 time.sleep(_RETRY_DELAY_SECONDS)
-            else:
-                logger.error("SigNoz GET %s failed on both attempts: %s", url, exc)
-                raise
-
-
-# ---------------------------------------------------------------------------
-# Public interface
-# ---------------------------------------------------------------------------
+                continue
+            logger.error("SigNoz GET failed on both attempts: %s", exc)
+            raise
+    raise RuntimeError("Unexpected retry state")
 
 
 def query_traces(
@@ -148,70 +81,34 @@ def query_traces(
     end_time: datetime | int | float,
     min_duration_ms: int | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Fetch trace spans for *service_name* within the given time window.
-
-    Args:
-        service_name:    OTel service.name attribute value (e.g. "demo-service").
-        start_time:      Window start — datetime or Unix timestamp (s or ms).
-        end_time:        Window end   — datetime or Unix timestamp (s or ms).
-        min_duration_ms: Optional lower bound on span duration in milliseconds.
-
-    Returns:
-        List of span dicts as returned by SigNoz, extracted from
-        ``result[0].list`` in the API response.  Empty list if no data.
-    """
-    start_ms = _to_epoch_ms(start_time)
-    end_ms = _to_epoch_ms(end_time)
-
-    filters: list[dict[str, Any]] = [
-        {
-            "key": {"key": "serviceName", "type": "tag", "dataType": "string", "isColumn": True},
-            "op": "=",
-            "value": service_name,
-        }
-    ]
+    start_ms, end_ms = _to_epoch_ms(start_time), _to_epoch_ms(end_time)
+    filters = [f"service.name = '{service_name}'"]
     if min_duration_ms is not None:
-        filters.append(
-            {
-                "key": {
-                    "key": "durationNano",
-                    "type": "tag",
-                    "dataType": "int64",
-                    "isColumn": True,
-                },
-                "op": ">=",
-                "value": min_duration_ms * 1_000_000,  # ms → ns
-            }
-        )
-
-    payload: dict[str, Any] = {
-        "start": start_ms,
-        "end": end_ms,
-        "step": 60,
-        "variables": {},
-        "compositeQuery": {
-            "queryType": "builder",
-            "panelType": "list",
-            "builderQueries": {
-                "A": {
-                    "dataSource": "traces",
-                    "queryName": "A",
-                    "aggregateOperator": "noop",
-                    "aggregateAttribute": {},
-                    "filters": {"op": "AND", "items": filters},
-                    "orderBy": [{"columnName": "timestamp", "order": "desc"}],
-                    "limit": 100,
-                    "offset": 0,
-                    "pageSize": 100,
-                }
-            },
-        },
-    }
-
-    logger.debug("query_traces: service=%s start=%d end=%d", service_name, start_ms, end_ms)
-    data = _post_with_retry(_QUERY_RANGE_URL, payload)
-    return _extract_list(data)
+        filters.append(f"durationNano >= {min_duration_ms * 1_000_000}")
+    payload = _raw_payload(
+        "traces",
+        start_ms,
+        end_ms,
+        " AND ".join(filters),
+        [
+            {"name": field, "fieldContext": context}
+            for field, context in (
+                ("service.name", "resource"),
+                ("name", "span"),
+                ("durationNano", "span"),
+                ("statusCode", "span"),
+                ("traceID", "span"),
+                ("spanID", "span"),
+                ("timestamp", "span"),
+            )
+        ],
+    )
+    rows = _extract_list(_post_with_retry(_QUERY_RANGE_URL, payload), "traces")
+    normalized = [_normalize_trace(row) for row in rows]
+    logger.info(
+        "SigNoz traces: service=%s raw=%d normalized=%d", service_name, len(rows), len(normalized)
+    )
+    return normalized
 
 
 def query_logs(
@@ -220,81 +117,35 @@ def query_logs(
     end_time: datetime | int | float,
     severity: str | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Fetch log records for *service_name* within the given time window.
-
-    Args:
-        service_name: OTel service.name attribute value.
-        start_time:   Window start — datetime or Unix timestamp (s or ms).
-        end_time:     Window end   — datetime or Unix timestamp (s or ms).
-        severity:     Optional severity level filter, e.g. "ERROR", "WARN".
-                      Case-insensitive; mapped to SigNoz ``severityText``.
-
-    Returns:
-        List of log record dicts. Empty list if no data.
-    """
-    start_ms = _to_epoch_ms(start_time)
-    end_ms = _to_epoch_ms(end_time)
-
-    filters: list[dict[str, Any]] = [
-        {
-            "key": {
-                "key": "serviceName",
-                "type": "resource",
-                "dataType": "string",
-                "isColumn": False,
-            },
-            "op": "=",
-            "value": service_name,
-        }
-    ]
-    if severity is not None:
-        filters.append(
-            {
-                "key": {
-                    "key": "severityText",
-                    "type": "tag",
-                    "dataType": "string",
-                    "isColumn": True,
-                },
-                "op": "=",
-                "value": severity.upper(),
-            }
-        )
-
-    payload: dict[str, Any] = {
-        "start": start_ms,
-        "end": end_ms,
-        "step": 60,
-        "variables": {},
-        "compositeQuery": {
-            "queryType": "builder",
-            "panelType": "list",
-            "builderQueries": {
-                "A": {
-                    "dataSource": "logs",
-                    "queryName": "A",
-                    "aggregateOperator": "noop",
-                    "aggregateAttribute": {},
-                    "filters": {"op": "AND", "items": filters},
-                    "orderBy": [{"columnName": "timestamp", "order": "desc"}],
-                    "limit": 100,
-                    "offset": 0,
-                    "pageSize": 100,
-                }
-            },
-        },
-    }
-
-    logger.debug(
-        "query_logs: service=%s severity=%s start=%d end=%d",
-        service_name,
-        severity,
+    start_ms, end_ms = _to_epoch_ms(start_time), _to_epoch_ms(end_time)
+    filters = [f"service.name = '{service_name}'"]
+    if severity:
+        filters.append(f"severityText = '{severity.upper()}'")
+    payload = _raw_payload(
+        "logs",
         start_ms,
         end_ms,
+        " AND ".join(filters),
+        [
+            {"name": field, "fieldContext": context}
+            for field, context in (
+                ("body", "log"),
+                ("severityText", "log"),
+                ("traceID", "log"),
+                ("spanID", "log"),
+                ("timestamp", "log"),
+                ("resources_string", "log"),
+                ("attributes_string", "log"),
+                ("attributes_number", "log"),
+            )
+        ],
     )
-    data = _post_with_retry(_QUERY_RANGE_URL, payload)
-    return _extract_list(data)
+    rows = _extract_list(_post_with_retry(_QUERY_RANGE_URL, payload), "logs")
+    normalized = [_normalize_log(row) for row in rows]
+    logger.info(
+        "SigNoz logs: service=%s raw=%d normalized=%d", service_name, len(rows), len(normalized)
+    )
+    return normalized
 
 
 def query_metrics(
@@ -303,131 +154,186 @@ def query_metrics(
     start_time: datetime | int | float,
     end_time: datetime | int | float,
 ) -> list[dict[str, Any]]:
-    """
-    Fetch time-series data for *metric_name* scoped to *service_name*.
-
-    Args:
-        service_name: OTel service.name label value used to filter the metric.
-        metric_name:  Metric instrument name, e.g. "db.query.duration".
-        start_time:   Window start — datetime or Unix timestamp (s or ms).
-        end_time:     Window end   — datetime or Unix timestamp (s or ms).
-
-    Returns:
-        List of time-series result dicts, each containing ``metric`` labels
-        and ``values`` (timestamp, value) pairs.  Empty list if no data.
-    """
-    start_ms = _to_epoch_ms(start_time)
-    end_ms = _to_epoch_ms(end_time)
-    step_s = max(60, (end_ms - start_ms) // (1000 * 100))  # ≤100 data points
-
+    start_ms, end_ms = _to_epoch_ms(start_time), _to_epoch_ms(end_time)
+    step_s = max(60, (end_ms - start_ms) // 100_000)
     payload: dict[str, Any] = {
         "start": start_ms,
         "end": end_ms,
-        "step": step_s,
+        "requestType": "time_series",
         "variables": {},
         "compositeQuery": {
-            "queryType": "builder",
-            "panelType": "time_series",
-            "builderQueries": {
-                "A": {
-                    "dataSource": "metrics",
-                    "queryName": "A",
-                    "aggregateOperator": "avg",
-                    "aggregateAttribute": {
-                        "key": metric_name,
-                        "dataType": "float64",
-                        "type": "gauge",
-                        "isColumn": False,
-                    },
-                    "filters": {
-                        "op": "AND",
-                        "items": [
+            "queries": [
+                {
+                    "type": "builder_query",
+                    "spec": {
+                        "name": "A",
+                        "signal": "metrics",
+                        "stepInterval": step_s,
+                        "aggregations": [
                             {
-                                "key": {
-                                    "key": "service_name",
-                                    "type": "tag",
-                                    "dataType": "string",
-                                    "isColumn": False,
-                                },
-                                "op": "=",
-                                "value": service_name,
+                                "metricName": metric_name,
+                                "timeAggregation": "avg",
+                                "spaceAggregation": "sum",
                             }
                         ],
+                        "filter": {"expression": f"service.name = '{service_name}'"},
+                        "groupBy": [],
+                        "disabled": False,
                     },
-                    "groupBy": [],
-                    "limit": 0,
-                    "offset": 0,
-                    "pageSize": 0,
                 }
-            },
+            ]
+        },
+    }
+    series = _extract_series(_post_with_retry(_QUERY_RANGE_URL, payload))
+    normalized = [_normalize_series(item, metric_name) for item in series]
+    points = sum(len(item["points"]) for item in normalized)
+    logger.info(
+        "SigNoz metrics: service=%s metric=%s series=%d points=%d",
+        service_name,
+        metric_name,
+        len(normalized),
+        points,
+    )
+    return normalized
+
+
+def get_alert_details(alert_id: str) -> dict[str, Any]:
+    """Get a SigNoz v2 alert rule. Alert identifiers are UUIDs, not numeric IDs."""
+    data = _get_with_retry(f"{_RULES_URL}/{alert_id}")
+    return data.get("data", data) if isinstance(data, dict) else {}
+
+
+def _raw_payload(
+    signal: str, start_ms: int, end_ms: int, expression: str, select_fields: list[dict[str, str]]
+) -> dict[str, Any]:
+    return {
+        "start": start_ms,
+        "end": end_ms,
+        "requestType": "raw",
+        "variables": {},
+        "compositeQuery": {
+            "queries": [
+                {
+                    "type": "builder_query",
+                    "spec": {
+                        "name": "A",
+                        "signal": signal,
+                        "filter": {"expression": expression},
+                        "selectFields": select_fields,
+                        "order": [{"key": {"name": "timestamp"}, "direction": "desc"}],
+                        "limit": 100,
+                        "offset": 0,
+                        "disabled": False,
+                    },
+                }
+            ]
         },
     }
 
-    logger.debug(
-        "query_metrics: service=%s metric=%s start=%d end=%d",
-        service_name,
-        metric_name,
-        start_ms,
-        end_ms,
-    )
-    data = _post_with_retry(_QUERY_RANGE_URL, payload)
-    return _extract_series(data)
 
-
-def get_alert_details(alert_id: int | str) -> dict[str, Any]:
-    """
-    Retrieve details for a single alert rule from SigNoz.
-
-    Args:
-        alert_id: Numeric rule ID as shown in the SigNoz Alerts UI or
-                  included in a webhook payload.
-
-    Returns:
-        Parsed alert-rule dict as returned by SigNoz ``GET /api/v1/rules/{id}``.
-
-    Raises:
-        requests.HTTPError: if the alert is not found (404) or any HTTP error
-            persists after the retry.
-    """
-    url = f"{_RULES_URL}/{alert_id}"
-    logger.debug("get_alert_details: id=%s", alert_id)
-    data = _get_with_retry(url)
-    # SigNoz wraps the rule object in {"status":"success","data":{...}}
-    return data.get("data", data)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _extract_list(response: dict[str, Any]) -> list[dict[str, Any]]:
-    """
-    Pull the flat list of records out of a SigNoz ``panelType=list`` response.
-
-    SigNoz returns:
-        {"status": "success", "data": {"result": [{"list": [...]}]}}
-    """
-    try:
-        results: list[Any] = response["data"]["result"]
-        if not results:
+def _results(response: dict[str, Any]) -> list[Any]:
+    current: Any = response
+    for key in ("data", "data", "results"):
+        if not isinstance(current, dict) or key not in current:
+            logger.warning(
+                "Unsupported SigNoz response shape: top_level_keys=%s response=%r",
+                list(response) if isinstance(response, dict) else type(response).__name__,
+                response,
+            )
             return []
-        # The first (and typically only) result bucket contains the rows
-        return results[0].get("list", [])
-    except (KeyError, IndexError, TypeError):
-        logger.warning("Unexpected SigNoz list response shape: %s", list(response.keys()))
-        return []
+        current = current[key]
+    return current if isinstance(current, list) else []
+
+
+def _extract_list(response: dict[str, Any], signal: str) -> list[dict[str, Any]]:
+    results = _results(response)
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        if isinstance(result, dict) and isinstance(result.get("rows"), list):
+            rows.extend(item for item in result["rows"] if isinstance(item, dict))
+    if not rows and results:
+        logger.warning("Unsupported SigNoz %s result shape: %r", signal, results[:1])
+    return rows
 
 
 def _extract_series(response: dict[str, Any]) -> list[dict[str, Any]]:
-    """
-    Pull the time-series data out of a SigNoz ``panelType=time_series`` response.
+    results = _results(response)
+    series: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        candidates = result.get("series") or result.get("data") or result.get("values")
+        if isinstance(candidates, list):
+            series.extend(item for item in candidates if isinstance(item, dict))
+        elif "values" in result or "points" in result:
+            series.append(result)
+    if not series and results:
+        logger.warning("Unsupported SigNoz metric result shape: %r", results[:1])
+    return series
 
-    SigNoz returns:
-        {"status": "success", "data": {"result": [{"metric": {...}, "values": [...]}]}}
-    """
-    try:
-        return response["data"]["result"]
-    except (KeyError, TypeError):
-        logger.warning("Unexpected SigNoz time_series response shape: %s", list(response.keys()))
-        return []
+
+def _unwrap(row: dict[str, Any]) -> dict[str, Any]:
+    data = row.get("data")
+    if isinstance(data, dict):
+        return {**row, **data}
+    return row
+
+
+def _value(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return row[key]
+    return None
+
+
+def _normalize_trace(row: dict[str, Any]) -> dict[str, Any]:
+    record = _unwrap(row)
+    return {
+        "traceID": _value(record, "traceID", "traceId", "trace_id") or "",
+        "spanID": _value(record, "spanID", "spanId", "span_id") or "",
+        "name": _value(record, "name", "spanName", "operationName") or "unknown-span",
+        "durationNano": _value(record, "durationNano", "duration_nano", "duration") or 0,
+        "service.name": _value(record, "service.name", "serviceName")
+        or _resource_value(record, "service.name"),
+        "timestamp": _value(record, "timestamp", "startTime", "start_time") or "",
+        "statusCode": _value(record, "statusCode", "status_code", "status") or "",
+    }
+
+
+def _normalize_log(row: dict[str, Any]) -> dict[str, Any]:
+    record = _unwrap(row)
+    return {
+        "body": _value(record, "body", "message", "msg") or "",
+        "severityText": _value(record, "severityText", "severity_text", "severity", "level")
+        or "INFO",
+        "traceID": _value(record, "traceID", "traceId", "trace_id") or "",
+        "spanID": _value(record, "spanID", "spanId", "span_id") or "",
+        "timestamp": _value(record, "timestamp", "time", "observedTimestamp") or "",
+        "resources_string": _value(record, "resources_string") or "",
+        "attributes_string": _value(record, "attributes_string") or "",
+        "attributes_number": _value(record, "attributes_number") or {},
+    }
+
+
+def _normalize_series(raw: dict[str, Any], requested_name: str) -> dict[str, Any]:
+    record = _unwrap(raw)
+    labels = record.get("labels") or record.get("metric") or record.get("metadata") or {}
+    labels = labels if isinstance(labels, dict) else {}
+    name = (
+        _value(record, "name", "metricName", "metric_name")
+        or labels.get("__name__")
+        or labels.get("metricName")
+        or requested_name
+    )
+    points = record.get("points") or record.get("values") or record.get("data") or []
+    if isinstance(points, dict):
+        points = points.get("values") or points.get("points") or []
+    if not isinstance(points, list):
+        logger.warning("Unsupported SigNoz metric series shape: %r", raw)
+        points = []
+    return {"name": str(name), "labels": labels, "points": points}
+
+
+def _resource_value(row: dict[str, Any], key: str) -> Any:
+    resource = row.get("resource") or row.get("resources")
+    return resource.get(key) if isinstance(resource, dict) else None

@@ -80,3 +80,59 @@ def test_metric_anomaly_point_uses_max_value() -> None:
     assert metric.max_value == 2500
     assert metric.anomaly_point is not None
     assert metric.anomaly_point.timestamp == 2
+
+
+def test_nested_records_preserve_ids_and_duration() -> None:
+    bundle = build_evidence_bundle(
+        [
+            {
+                "timestamp": "2026-08-09T00:00:00Z",
+                "data": {
+                    "traceID": "trace-real",
+                    "spanID": "span-real",
+                    "name": "db.orders.slow_query",
+                    "durationNano": 2_000_000_000,
+                },
+            }
+        ],
+        [
+            {
+                "timestamp": "2026-08-09T00:00:01Z",
+                "data": {
+                    "body": "Slow query detected",
+                    "severityText": "WARN",
+                    "traceID": "trace-real",
+                    "spanID": "span-real",
+                },
+            }
+        ],
+        [],
+    )
+    assert bundle.spans[0].trace_id == "trace-real"
+    assert bundle.spans[0].span_id == "span-real"
+    assert bundle.spans[0].duration_ms == 2000
+    assert bundle.logs[0].trace_id == "trace-real"
+
+
+def test_incident_span_outranks_unrelated_long_health_check() -> None:
+    bundle = build_evidence_bundle(
+        [
+            {
+                "traceID": "health-trace",
+                "spanID": "health-span",
+                "name": "GET /health",
+                "durationNano": 800_000_000_000,
+            },
+            {
+                "traceID": "order-trace",
+                "spanID": "order-span",
+                "name": "db.orders.slow_query",
+                "durationNano": 2_000_000_000,
+            },
+        ],
+        [],
+        [],
+        incident_keywords=["db.query.duration", "slow query"],
+        service_name="demo-service",
+    )
+    assert bundle.spans[0].span_id == "order-span"

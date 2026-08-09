@@ -84,3 +84,32 @@ def test_span_only_citation_is_medium_confidence() -> None:
     hypothesis = parse_and_validate_hypothesis(response, _bundle())
 
     assert hypothesis.confidence == "Medium"
+
+
+def test_insufficient_evidence_keeps_valid_citations() -> None:
+    response = json.dumps(
+        {
+            "summary": "Metric is missing context.",
+            "cited_ids": ["span-db-1"],
+            "suggested_fix": "Collect logs.",
+            "insufficient_evidence": True,
+        }
+    )
+    hypothesis = parse_and_validate_hypothesis(response, _bundle())
+    assert hypothesis.result_status == "INSUFFICIENT_EVIDENCE"
+    assert hypothesis.cited_ids == ["span-db-1"]
+
+
+def test_invalid_citation_has_distinct_status() -> None:
+    response = json.dumps(
+        {
+            "summary": "Bad reference.",
+            "cited_ids": ["not-present"],
+            "suggested_fix": "None.",
+            "insufficient_evidence": False,
+        }
+    )
+    assert (
+        parse_and_validate_hypothesis(response, _bundle()).result_status
+        == "CITATION_VALIDATION_FAILED"
+    )

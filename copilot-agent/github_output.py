@@ -65,6 +65,8 @@ def render_issue_markdown(
         if top_trace
         else "No trace link available"
     )
+    nested_alert = alert.get("alert")
+    nested_name = nested_alert.get("name") if isinstance(nested_alert, dict) else nested_alert
     return template.format(
         service_name=service_name,
         confidence=hypothesis.confidence,
@@ -75,7 +77,11 @@ def render_issue_markdown(
         alert_name=alert.get("alertname")
         or alert.get("ruleName")
         or alert.get("name")
+        or nested_name
         or "Unknown alert",
+        incident_window=alert.get("incident_window")
+        or alert.get("startsAt")
+        or "See investigation log",
         evidence_json=bundle.model_dump_json(indent=2),
     )
 

@@ -15,6 +15,7 @@ def send_slack_notification(
     service_name: str,
     hypothesis: RootCauseHypothesis,
     issue_url: str | None,
+    alert_name: str = "Unknown alert",
 ) -> None:
     settings = get_settings()
     if not settings.slack_webhook_url or not issue_url:
@@ -22,6 +23,7 @@ def send_slack_notification(
 
     text = (
         f"*RootCauser incident:* `{service_name}`\n"
+        f"*Alert:* {alert_name}\n"
         f"*Confidence:* {hypothesis.confidence}\n"
         f"*Summary:* {hypothesis.summary}\n"
         f"*Suggested fix:* {hypothesis.suggested_fix}\n"

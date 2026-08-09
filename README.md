@@ -103,7 +103,7 @@ SigNoz provides the local observability backend, alerting engine, and correlated
 - Docker Compose
 - OpenTelemetry SDK and Collector
 - SigNoz self-hosted
-- OpenAI-compatible chat completions
+- OpenRouter chat completions at `https://openrouter.ai/api/v1/chat/completions`, using `LLM_MODEL_NAME`
 - GitHub REST API
 - pytest and Ruff
 
@@ -113,3 +113,6 @@ SigNoz provides the local observability backend, alerting engine, and correlated
 - 1 month: support more incident types, add deduplication, improve issue updates instead of always creating new issues.
 - 3 months: add service topology context, ownership routing, and richer remediation suggestions.
 - 6 months: productionize authentication, persistence, multi-service incidents, and human approval workflows.
+## Investigation data path
+
+RootCauser retrieves telemetry from SigNoz REST `POST /api/v5/query_range` and, when a webhook supplies a rule UUID, retrieves rule context from `GET /api/v2/rules/{uuid}`. Alert IDs are UUIDs. It deterministically normalizes and ranks traces, logs, and metrics before sending only that evidence bundle to OpenRouter. The configured `LLM_MODEL_NAME` is used with `https://openrouter.ai/api/v1/chat/completions`; the LLM reasons over evidence but does not retrieve it. Citation validation rejects unsupported claims before GitHub and Slack outputs are produced.
