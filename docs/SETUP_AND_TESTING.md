@@ -222,7 +222,7 @@ $body = @{ alertname = "manual slow query test"; labels = @{ serviceName = "demo
 Invoke-RestMethod -Uri "http://localhost:8001/webhook/alert" -Method POST -ContentType "application/json" -Body $body
 ```
 
-Generate slow-query traffic in the same incident window first. Agent logs should show relevant `db.orders.slow_query` / `GET /orders` evidence when present, real metric point counts, the LLM result state, and the GitHub URL. Manual alerts have no rule UUID; SigNoz production payloads with a UUID additionally use `GET /api/v2/rules/{uuid}`.
+Generate incident traffic in the same alert window first. Agent logs should show selected evidence with relevance scores/reasons, real metric point counts, the LLM result state, and the GitHub URL. Manual alerts have no rule UUID; SigNoz production payloads with a UUID additionally use `GET /api/v2/rules/{uuid}`.
 
 Run unit tests:
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -14,6 +15,8 @@ class SpanEvidence(BaseModel):
     name: str
     duration_ms: float
     is_error: bool = False
+    relevance_score: int = 0
+    relevance_reasons: list[str] = Field(default_factory=list)
 
 
 class LogEvidence(BaseModel):
@@ -22,6 +25,8 @@ class LogEvidence(BaseModel):
     body: str
     trace_id: str | None = None
     span_id: str | None = None
+    relevance_score: int = 0
+    relevance_reasons: list[str] = Field(default_factory=list)
 
 
 class MetricPoint(BaseModel):
@@ -60,28 +65,35 @@ def build_evidence_bundle(
     incident_keywords: list[str] | None = None,
     alert_timestamp: str | None = None,
     service_name: str | None = None,
+    incident_context: dict[str, Any] | None = None,
 ) -> EvidenceBundle:
     """Build a ranked bundle from raw SigNoz trace, log, and metric records."""
 
-    raw_traces = traces or []
-    keywords = _keywords(incident_keywords)
-    spans = [(_span_from_raw(span), span) for span in raw_traces]
-    spans.sort(
-        key=lambda item: _span_score(item[0], item[1], keywords, alert_timestamp, service_name),
-        reverse=True,
-    )
-    spans = [span for span, _ in spans[:5]]
-
-    span_trace_ids = {span.trace_id for span in spans if span.trace_id}
-
-    ranked_logs = sorted(
-        (_log_from_raw(log) for log in logs or []),
-        key=lambda log: (
-            _log_score(log, span_trace_ids),
-            str(log.timestamp),
-        ),
-        reverse=True,
-    )[:5]
+    context = incident_context or {}
+    keywords = _keywords(context.get("semantic_terms") or incident_keywords)
+    alert_time = context.get("alert_timestamp") or alert_timestamp
+    expected_service = context.get("service_name") or service_name
+    health_alert = bool(context.get("is_health_alert"))
+    normalized_logs = [_log_from_raw(log) for log in logs or []]
+    log_trace_ids = {log.trace_id for log in normalized_logs if log.trace_id}
+    log_span_ids = {log.span_id for log in normalized_logs if log.span_id}
+    trace_counts = _trace_counts(traces or [])
+    candidates: list[SpanEvidence] = []
+    for raw in traces or []:
+        span = _span_from_raw(raw)
+        span.relevance_score, span.relevance_reasons = _span_score(
+            span, raw, keywords, alert_time, expected_service, health_alert,
+            log_trace_ids, log_span_ids, trace_counts,
+        )
+        candidates.append(span)
+    spans = _select_diverse_spans(candidates)
+    selected_trace_ids = {span.trace_id for span in spans if span.trace_id}
+    selected_span_ids = {span.span_id for span in spans if span.span_id}
+    for log in normalized_logs:
+        log.relevance_score, log.relevance_reasons = _log_score(
+            log, selected_trace_ids, selected_span_ids, alert_time
+        )
+    ranked_logs = sorted(normalized_logs, key=lambda log: (log.relevance_score, str(log.timestamp)), reverse=True)[:5]
 
     metric_series = [_metric_from_raw(metric) for metric in metrics or []]
 
@@ -346,22 +358,36 @@ def _point_from_raw(raw: Any) -> MetricPoint:
 def _log_score(
     log: LogEvidence,
     trace_ids: set[str],
-) -> int:
+    span_ids: set[str],
+    alert_timestamp: str | int | float | None,
+) -> tuple[int, list[str]]:
     score = 0
+    reasons: list[str] = []
 
     if log.trace_id and log.trace_id in trace_ids:
-        score += 10
+        score += 60
+        reasons.append("trace_id matches selected span")
+    if log.span_id and log.span_id in span_ids:
+        score += 80
+        reasons.append("span_id matches selected span")
 
     if log.severity == "ERROR":
-        score += 5
+        score += 30
+        reasons.append("ERROR severity")
     elif log.severity in {"WARN", "WARNING"}:
-        score += 3
+        score += 20
+        reasons.append("WARN severity")
 
-    return score
+    proximity = _temporal_proximity(log.timestamp, alert_timestamp)
+    if proximity is not None:
+        score += proximity
+        reasons.append("near alert time")
+
+    return score, reasons
 
 
 def _keywords(values: list[str] | None) -> set[str]:
-    terms = {"slow", "query", "db", "orders", "error", "downstream", "api"}
+    terms: set[str] = set()
     for value in values or []:
         terms.update(
             token
@@ -375,29 +401,103 @@ def _span_score(
     span: SpanEvidence,
     raw: dict[str, Any],
     keywords: set[str],
-    alert_timestamp: str | None,
+    alert_timestamp: str | int | float | None,
     service_name: str | None,
-) -> tuple[int, float, str]:
-    """Rank incident evidence, not merely the longest span in the window."""
+    health_alert: bool,
+    log_trace_ids: set[str],
+    log_span_ids: set[str],
+    trace_counts: dict[str, int],
+) -> tuple[int, list[str]]:
+    """Rank incident evidence; correlation deliberately outweighs duration."""
     record = _unwrap_data(raw)
     name = span.name.lower()
     score = 0
-    score += 30 * sum(term in name for term in keywords)
-    if any(term in name for term in ("health", "readiness", "liveness")):
+    reasons: list[str] = []
+    matches = [term for term in keywords if term in name]
+    if matches:
+        score += 35 * len(matches)
+        reasons.append("alert semantic match: " + ", ".join(sorted(matches)))
+    if not health_alert and any(term in name for term in ("health", "readiness", "liveness")):
         score -= 120
-    if span.is_error:
-        score += 35
-    if span.duration_ms >= 1_000:
+        reasons.append("routine health span penalty")
+    if span.span_id and span.span_id in log_span_ids:
+        score += 100
+        reasons.append("correlated log span_id")
+    elif span.trace_id and span.trace_id in log_trace_ids:
+        score += 70
+        reasons.append("correlated log trace_id")
+    if span.trace_id and trace_counts.get(span.trace_id, 0) > 1:
         score += 20
+        reasons.append("trace contains correlated spans")
+    if span.is_error:
+        score += 40
+        reasons.append("error status")
+    if span.duration_ms >= 1_000:
+        score += 10
+        reasons.append("long duration")
     elif span.duration_ms >= 100:
-        score += 8
+        score += 5
+        reasons.append("elevated duration")
     record_service = str(record.get("service.name") or record.get("serviceName") or "")
     if service_name and record_service == service_name:
-        score += 10
-    # Timestamp is a stable tie breaker; raw query is already bounded to the incident window.
-    if alert_timestamp and str(record.get("timestamp", "")) == str(alert_timestamp):
-        score += 5
-    return score, span.duration_ms, span.span_id
+        score += 25
+        reasons.append("service match")
+    proximity = _temporal_proximity(record.get("timestamp"), alert_timestamp)
+    if proximity is not None:
+        score += proximity
+        reasons.append("near alert time")
+    return score, reasons
+
+
+def _select_diverse_spans(spans: list[SpanEvidence]) -> list[SpanEvidence]:
+    selected: list[SpanEvidence] = []
+    seen: set[tuple[str, str, str, float]] = set()
+    per_trace: dict[str, int] = {}
+    for span in sorted(spans, key=lambda item: (item.relevance_score, item.duration_ms), reverse=True):
+        signature = (span.trace_id, span.span_id, span.name, span.duration_ms)
+        if signature in seen or per_trace.get(span.trace_id, 0) >= 2:
+            continue
+        seen.add(signature)
+        per_trace[span.trace_id] = per_trace.get(span.trace_id, 0) + 1
+        selected.append(span)
+        if len(selected) == 5:
+            break
+    return selected
+
+
+def _trace_counts(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        trace_id = _first(_unwrap_data(record), "traceID", "trace_id", "traceId")
+        if trace_id:
+            counts[str(trace_id)] = counts.get(str(trace_id), 0) + 1
+    return counts
+
+
+def _temporal_proximity(value: Any, alert_value: Any) -> int | None:
+    timestamp, alert_timestamp = _parse_timestamp(value), _parse_timestamp(alert_value)
+    if timestamp is None or alert_timestamp is None:
+        return None
+    seconds = abs((timestamp - alert_timestamp).total_seconds())
+    if seconds <= 60:
+        return 30
+    if seconds <= 300:
+        return 15
+    return 0
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)) or str(value).isdigit():
+            numeric = float(value)
+            return datetime.fromtimestamp(
+                numeric / 1000 if numeric > 1e12 else numeric, tz=UTC
+            )
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _duration_to_ms(value: Any) -> float:

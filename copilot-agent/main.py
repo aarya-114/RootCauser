@@ -172,9 +172,9 @@ def process_alert(payload: dict[str, Any]) -> None:
         traces,
         logs,
         metrics,
-        incident_keywords=_incident_keywords(payload, alert_details, metric_name),
-        alert_timestamp=end_time.isoformat(),
-        service_name=service_name,
+        incident_context=_incident_context(
+            payload, alert_details, metric_name, service_name, end_time
+        ),
     )
 
     metric_points = sum(len(series.points) for series in bundle.metrics)
@@ -337,6 +337,36 @@ def _incident_keywords(
     values = [_alert_name(alert, payload), metric_name]
     values.extend(_find_metric_names(alert))
     return values
+
+
+def _incident_context(
+    payload: dict[str, Any],
+    alert: dict[str, Any],
+    metric_name: str,
+    service_name: str,
+    alert_time: datetime,
+) -> dict[str, Any]:
+    """Pass only real webhook/rule semantics into deterministic ranking."""
+    terms = _incident_keywords(payload, alert, metric_name)
+    terms.extend(_all_strings(alert.get("compositeQuery", {})))
+    terms.extend(_all_strings(payload.get("labels", {})))
+    normalized = " ".join(terms).lower()
+    return {
+        "service_name": service_name,
+        "alert_timestamp": alert_time.isoformat(),
+        "semantic_terms": list(dict.fromkeys(terms)),
+        "is_health_alert": any(word in normalized for word in ("health", "readiness", "liveness")),
+    }
+
+
+def _all_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for child in value.values() for text in _all_strings(child)]
+    if isinstance(value, list):
+        return [text for child in value for text in _all_strings(child)]
+    return []
 
 
 def _alert_name(alert: dict[str, Any], payload: dict[str, Any]) -> str:

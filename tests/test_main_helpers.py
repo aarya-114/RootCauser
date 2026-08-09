@@ -6,7 +6,7 @@ from pathlib import Path
 AGENT_PATH = Path(__file__).resolve().parents[1] / "copilot-agent"
 sys.path.insert(0, str(AGENT_PATH))
 
-from main import _extract_alert_id, _extract_metric_name  # noqa: E402
+from main import _extract_alert_id, _extract_metric_name, _incident_context  # noqa: E402
 
 
 def test_manual_webhook_has_no_alert_id_and_fallback_metric() -> None:
@@ -33,3 +33,10 @@ def test_alert_rule_metric_takes_precedence() -> None:
     }
     assert _extract_alert_id({"ruleId": rule["id"]}) == rule["id"]
     assert _extract_metric_name({"alertname": "anything"}, rule) == "db.query.duration.sum"
+
+
+def test_incident_context_includes_composite_query_semantics() -> None:
+    from datetime import UTC, datetime
+
+    context = _incident_context({}, {"compositeQuery": {"filter": "database timeout"}}, "metric.name", "svc", datetime.now(UTC))
+    assert "database timeout" in context["semantic_terms"]

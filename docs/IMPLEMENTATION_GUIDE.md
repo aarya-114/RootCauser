@@ -50,7 +50,7 @@ flowchart TB
 
 ## Component Interaction
 
-The SigNoz client uses REST `POST /api/v5/query_range`; rule lookup is `GET /api/v2/rules/{uuid}` where the identifier is a UUID. The bundler normalizes nested `data` records and deterministically ranks incident-relevant evidence before the OpenRouter call. OpenRouter uses `https://openrouter.ai/api/v1/chat/completions` and the configurable `LLM_MODEL_NAME`. Citation validation prevents unsupported claims from reaching GitHub or Slack.
+The SigNoz client uses REST `POST /api/v5/query_range`; rule lookup is `GET /api/v2/rules/{uuid}` where the identifier is a UUID. The bundler normalizes nested `data` records and deterministically ranks incident-relevant evidence using alert semantics, service, telemetry correlation, time proximity, errors, and secondary duration, with health-span penalties and duplicate diversity limits. Each selected item carries a relevance score and reasons before the OpenRouter call. OpenRouter uses `https://openrouter.ai/api/v1/chat/completions` and the configurable `LLM_MODEL_NAME`. Citation validation prevents unsupported claims from reaching GitHub or Slack.
 
 1. `demo-service` receives normal or bug-injected API traffic.
 2. `demo-service/otel_config.py` initializes OpenTelemetry providers.

@@ -136,3 +136,39 @@ def test_incident_span_outranks_unrelated_long_health_check() -> None:
         service_name="demo-service",
     )
     assert bundle.spans[0].span_id == "order-span"
+
+
+def test_log_correlation_and_semantics_outrank_duration() -> None:
+    bundle = build_evidence_bundle(
+        [
+            {"traceID": "health", "spanID": "health", "name": "GET /health", "durationMs": 800000},
+            {"traceID": "db-trace", "spanID": "db-span", "name": "database operation", "durationMs": 10},
+        ],
+        [{"traceID": "db-trace", "spanID": "db-span", "severityText": "WARN", "body": "query"}],
+        [],
+        incident_context={"semantic_terms": ["database", "query"]},
+    )
+    assert bundle.spans[0].span_id == "db-span"
+    assert "correlated log span_id" in bundle.spans[0].relevance_reasons
+    assert bundle.spans[0].relevance_score > bundle.spans[1].relevance_score
+
+
+def test_temporal_health_and_diversity_ranking() -> None:
+    alert_time = "2026-08-10T10:00:00Z"
+    traces = [
+        {"traceID": "dup", "spanID": f"dup-{i}", "name": "database query", "durationMs": 100}
+        for i in range(4)
+    ]
+    traces.extend(
+        [
+            {"traceID": "near", "spanID": "near", "name": "database query", "durationMs": 100, "timestamp": alert_time},
+            {"traceID": "far", "spanID": "far", "name": "database query", "durationMs": 100, "timestamp": "2026-08-10T09:00:00Z"},
+            {"traceID": "health", "spanID": "health", "name": "GET /health", "durationMs": 1},
+        ]
+    )
+    bundle = build_evidence_bundle(traces, [], [], incident_context={"semantic_terms": ["database"], "alert_timestamp": alert_time})
+    assert bundle.spans[0].span_id == "near"
+    assert sum(span.trace_id == "dup" for span in bundle.spans) <= 2
+    health_bundle = build_evidence_bundle([traces[-1]], [], [], incident_context={"semantic_terms": ["health"], "is_health_alert": True})
+    assert "routine health span penalty" not in health_bundle.spans[0].relevance_reasons
+    assert bundle.spans[0].trace_id == "near"
