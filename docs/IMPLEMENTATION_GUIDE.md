@@ -19,6 +19,8 @@ RootCauser is an automated incident-investigation prototype built around determi
 - `reasoning.py`: OpenRouter request, structured response parsing, citation validation, confidence calculation, and insufficient-evidence handling.
 - `github_output.py`: deterministic GitHub incident-report facts (summary, chain, confidence signals, timeline, coverage, and raw evidence) plus the validated LLM hypothesis/remediation. `slack_output.py` sends the external notification.
 
+`github_output.py` also owns lightweight active-incident versioning. It uses the webhook/rule identity preserved by `main.py`, updates the existing GitHub issue for repeated firings, and includes `Incident Version` in each report. The map is process-local; `RESOLVED` clears it when that webhook status is present.
+
 ## Ranking and grounding
 
 Ranking occurs before LLM reasoning. It uses service match, alert-rule/composite-query semantics, trace and log IDs, trace membership, alert-time proximity, error/WARN status, secondary duration, health penalties, duplicate suppression, and per-trace limits. This is deterministic so that evidence selection can be tested and reviewed separately from model behavior.

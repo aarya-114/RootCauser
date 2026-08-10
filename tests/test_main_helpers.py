@@ -8,6 +8,7 @@ sys.path.insert(0, str(AGENT_PATH))
 
 from main import (  # noqa: E402
     _extract_alert_id,
+    _extract_alert_status,
     _extract_metric_name,
     _incident_context,
     _preserve_webhook_alert_name,
@@ -41,6 +42,10 @@ def test_webhook_alert_name_is_preserved_for_output_context() -> None:
     }
     context = _preserve_webhook_alert_name({"name": "rule metadata"}, payload)
     assert context["alertname"] == "rootcauser-downstream-payment-timeout"
+
+
+def test_resolved_status_is_recognized_from_nested_alert() -> None:
+    assert _extract_alert_status({"alerts": [{"status": "resolved"}]}) == "RESOLVED"
 
 
 def test_alert_rule_metric_takes_precedence() -> None:

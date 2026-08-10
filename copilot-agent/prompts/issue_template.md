@@ -3,6 +3,7 @@
 **Service:** `{service_name}`
 **Alert:** `{alert_name}`
 **Incident window:** `{incident_window}`
+**Incident Version:** {incident_version}
 **Confidence:** `{confidence}`
 
 ### Hypothesis

@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import requests
@@ -14,6 +15,8 @@ from reasoning import RootCauseHypothesis
 
 RETRY_DELAY_SECONDS = 2.0
 ARTIFACT_DIR = Path(__file__).parent / "artifacts"
+_ACTIVE_INCIDENTS: dict[str, dict[str, Any]] = {}
+_INCIDENT_LOCK = Lock()
 
 
 def create_github_issue(
@@ -22,13 +25,19 @@ def create_github_issue(
     bundle: EvidenceBundle,
     alert: dict[str, Any] | None = None,
 ) -> str | None:
-    """Render and create a GitHub issue. Returns the issue URL when created."""
+    """Create Version 1 or update the active issue for the same rule identity."""
     settings = get_settings()
+    alert = alert or {}
+    identity = _incident_identity(alert)
+    with _INCIDENT_LOCK:
+        active = _ACTIVE_INCIDENTS.get(identity) if identity else None
+        version = int(active["version"]) + 1 if active else 1
     title = f"[RootCauser] {service_name}: {hypothesis.confidence} root-cause hypothesis"
-    body = render_issue_markdown(service_name, hypothesis, bundle, alert or {})
+    body = render_issue_markdown(service_name, hypothesis, bundle, alert, version)
     _write_local_issue(title, body)
 
     if not settings.github_token or settings.github_repo == "your-org/your-repo":
+        _remember_incident(identity, version, None, None)
         return None
 
     url = f"https://api.github.com/repos/{settings.github_repo}/issues"
@@ -39,11 +48,31 @@ def create_github_issue(
     }
     payload = {"title": title, "body": body, "labels": ["rootcauser", "incident"]}
 
+    if active and active.get("issue_number") is not None:
+        issue_number = active["issue_number"]
+        issue_url = f"{url}/{issue_number}"
+        for attempt in (1, 2):
+            try:
+                response = requests.patch(issue_url, headers=headers, json=payload, timeout=30)
+                response.raise_for_status()
+                updated = response.json()
+                result_url = str(updated.get("html_url") or active.get("issue_url") or "")
+                _remember_incident(identity, version, issue_number, result_url)
+                return result_url or None
+            except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+                if attempt == 1:
+                    time.sleep(RETRY_DELAY_SECONDS)
+                    continue
+                raise
+
     for attempt in (1, 2):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             response.raise_for_status()
-            return str(response.json().get("html_url"))
+            created = response.json()
+            result_url = str(created.get("html_url") or "")
+            _remember_incident(identity, version, created.get("number"), result_url)
+            return result_url or None
         except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
             if attempt == 1:
                 time.sleep(RETRY_DELAY_SECONDS)
@@ -57,6 +86,7 @@ def render_issue_markdown(
     hypothesis: RootCauseHypothesis,
     bundle: EvidenceBundle,
     alert: dict[str, Any],
+    incident_version: int = 1,
 ) -> str:
     template = (Path(__file__).parent / "prompts" / "issue_template.md").read_text(encoding="utf-8")
     top_trace = bundle.spans[0].trace_id if bundle.spans else ""
@@ -84,6 +114,7 @@ def render_issue_markdown(
         incident_window=alert.get("incident_window")
         or alert.get("startsAt")
         or "See investigation log",
+        incident_version=incident_version,
         evidence_summary=report["evidence_summary"],
         evidence_chain=report["evidence_chain"],
         confidence_breakdown=report["confidence_breakdown"],
@@ -93,6 +124,35 @@ def render_issue_markdown(
         evidence_coverage=report["evidence_coverage"],
         evidence_json=bundle.model_dump_json(indent=2),
     )
+
+
+def clear_active_incident(identity: str | None) -> None:
+    """Forget the active issue when SigNoz reliably reports a resolved firing."""
+    if not identity:
+        return
+    with _INCIDENT_LOCK:
+        _ACTIVE_INCIDENTS.pop(identity, None)
+
+
+def _remember_incident(
+    identity: str | None, version: int, issue_number: Any, issue_url: str | None
+) -> None:
+    if not identity:
+        return
+    with _INCIDENT_LOCK:
+        _ACTIVE_INCIDENTS[identity] = {
+            "version": version,
+            "issue_number": issue_number,
+            "issue_url": issue_url,
+        }
+
+
+def _incident_identity(alert: dict[str, Any]) -> str | None:
+    for key in ("_incident_identity", "ruleId", "rule_id", "alertId", "id"):
+        value = alert.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:

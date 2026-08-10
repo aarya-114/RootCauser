@@ -10,7 +10,7 @@ import mcp_client
 from config import get_settings
 from evidence_bundler import build_evidence_bundle
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
-from github_output import create_github_issue
+from github_output import clear_active_incident, create_github_issue
 from reasoning import analyze_incident
 from slack_output import send_slack_notification
 
@@ -76,6 +76,12 @@ def process_alert(payload: dict[str, Any]) -> None:
     start_time = end_time - timedelta(minutes=settings.incident_window_minutes)
 
     alert_id = _extract_alert_id(payload)
+    alert_status = _extract_alert_status(payload)
+
+    if alert_status == "RESOLVED":
+        clear_active_incident(alert_id)
+        logger.info("Resolved alert cleared from active incident state: alert_id=%s", alert_id)
+        return
 
     logger.info(
         "Investigating service=%s window=%s..%s alert_id=%s",
@@ -107,6 +113,8 @@ def process_alert(payload: dict[str, Any]) -> None:
             )
 
     alert_details = _preserve_webhook_alert_name(alert_details, payload)
+    if alert_id:
+        alert_details["_incident_identity"] = alert_id
 
     # ---------------------------------------------------------
     # 3. Retrieve observability evidence
@@ -429,6 +437,15 @@ def _extract_alert_id(
         if payload.get(key):
             return str(payload[key])
 
+    return None
+
+
+def _extract_alert_status(payload: dict[str, Any]) -> str | None:
+    for source in [payload] + [item for item in payload.get("alerts", []) if isinstance(item, dict)]:
+        for key in ("status", "state", "alertState"):
+            value = source.get(key)
+            if isinstance(value, str) and value.upper() in {"FIRING", "RESOLVED"}:
+                return value.upper()
     return None
 
 

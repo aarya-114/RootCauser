@@ -24,3 +24,7 @@ Traces, logs, and metrics are independent sources. Metric queries use SigNoz v5 
 `reasoning.py` calls OpenRouter's OpenAI-compatible chat-completions endpoint with `LLM_MODEL_NAME`. Its JSON response is accepted only when every cited ID is present in the evidence bundle. Unsupported citations, malformed output, empty evidence, and legitimate uncertainty result in an insufficient-evidence outcome rather than an invented cause.
 
 `github_output.py` creates the incident issue when configured. Its evidence summary, evidence chain, confidence breakdown, timeline, coverage table, and raw evidence bundle are generated deterministically from the selected evidence; only the hypothesis and suggested fix come from the LLM. `slack_output.py` sends a concise notification after the issue result is available.
+
+## Active incident versioning
+
+`github_output.py` keeps a process-local active-incident map keyed by the reliable SigNoz rule/alert ID supplied by `main.py`. The first firing creates Version 1; repeated active firings PATCH the same GitHub issue and increment the version. When a webhook explicitly reports `RESOLVED`, `main.py` clears that key so a later firing creates a new issue. This state is intentionally not persistent: an agent restart, missing stable identity, or a webhook without a reliable resolved state can result in a new Version 1 issue.

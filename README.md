@@ -20,6 +20,8 @@ SigNoz alert → FastAPI webhook → SigNoz evidence retrieval → deterministic
 5. OpenRouter receives only the selected evidence bundle. Every cited ID must be present in that bundle.
 6. A validated result is rendered as a GitHub issue and summarized through Slack when configured.
 
+For a stable alert/rule identity, the first active firing creates Incident Version 1 and repeated firings update the same GitHub issue with incremented versions. A reliable `RESOLVED` status clears that in-memory active mapping.
+
 If telemetry is missing, a log query fails, or the LLM cannot support a claim, RootCauser reports insufficient evidence rather than inventing a root cause.
 
 ## Technologies

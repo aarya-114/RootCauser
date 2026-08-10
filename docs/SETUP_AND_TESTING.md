@@ -57,3 +57,5 @@ venv\Scripts\python.exe -m ruff check copilot-agent tests
 ```
 
 The unit suite does not require live SigNoz, OpenRouter, GitHub, or Slack.
+
+For a real alert with a stable rule ID, send repeated FIRING notifications before RESOLVED to verify that the same GitHub issue is updated with increasing Incident Version values. After a reliable RESOLVED notification, the next firing creates a new Version 1 issue. This lightweight state resets when the copilot-agent restarts.
