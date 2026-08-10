@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,7 @@ def render_issue_markdown(
     )
     nested_alert = alert.get("alert")
     nested_name = nested_alert.get("name") if isinstance(nested_alert, dict) else nested_alert
+    report = build_report_facts(bundle)
     return template.format(
         service_name=service_name,
         confidence=hypothesis.confidence,
@@ -82,8 +84,163 @@ def render_issue_markdown(
         incident_window=alert.get("incident_window")
         or alert.get("startsAt")
         or "See investigation log",
+        evidence_summary=report["evidence_summary"],
+        evidence_chain=report["evidence_chain"],
+        confidence_breakdown=report["confidence_breakdown"],
+        timeline_section=(
+            f"### Incident Timeline\n\n{report['timeline']}" if report["timeline"] else ""
+        ),
+        evidence_coverage=report["evidence_coverage"],
         evidence_json=bundle.model_dump_json(indent=2),
     )
+
+
+def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
+    """Render deterministic incident facts from selected evidence only."""
+    correlated_logs = [
+        log for log in bundle.logs if "matches selected span" in " ".join(log.relevance_reasons)
+    ]
+    metric_series = [series for series in bundle.metrics if series.points]
+    summary_rows = [
+        ("Traces", _trace_observation(bundle), _relevance(bundle.spans)),
+        ("Logs", _log_observation(bundle.logs), _relevance(bundle.logs)),
+        ("Metrics", _metric_observation(metric_series), _relevance(metric_series)),
+        (
+            "Correlation",
+            f"{len(correlated_logs)} logs matched selected trace/span IDs"
+            if correlated_logs
+            else "No selected trace/log ID matches",
+            "High" if correlated_logs else "Unavailable",
+        ),
+    ]
+    evidence_summary = "\n".join(
+        ["| Evidence | Observation | Relevance |", "|---|---|---|"]
+        + [f"| {kind} | {observation} | {relevance} |" for kind, observation, relevance in summary_rows]
+    )
+
+    chain: list[str] = []
+    if bundle.spans:
+        chain.append(_trace_observation(bundle))
+    if bundle.logs:
+        chain.append(_log_observation(bundle.logs))
+    if metric_series:
+        chain.append(_metric_observation(metric_series))
+    if correlated_logs:
+        chain.append(f"{len(correlated_logs)} selected logs share trace or span IDs with selected spans")
+    if not chain:
+        chain.append("No usable telemetry evidence was selected")
+    evidence_chain = "\n".join(f"{index}. {fact}." for index, fact in enumerate(chain, 1))
+
+    supporting = []
+    missing = []
+    if bundle.spans:
+        supporting.append("Repeated relevant traces" if len(bundle.spans) > 1 else "Relevant trace")
+    else:
+        missing.append("No selected traces")
+    if bundle.logs:
+        supporting.append("Selected logs")
+    else:
+        missing.append("No selected logs")
+    if metric_series:
+        supporting.append("Relevant metric data")
+    else:
+        missing.append("No metric points")
+    if correlated_logs:
+        supporting.append("Trace/log correlation")
+    else:
+        missing.append("No selected trace/log ID correlation")
+    confidence_breakdown = "\n".join(
+        ["**Supporting signals**"]
+        + [f"- ✓ {item}" for item in supporting]
+        + ["", "**Missing evidence**"]
+        + [f"- {item}" for item in missing]
+    )
+
+    coverage_rows = [
+        ("Traces", bool(bundle.spans)),
+        ("Logs", bool(bundle.logs)),
+        ("Metrics", bool(metric_series)),
+        ("Trace/log correlation", bool(correlated_logs)),
+    ]
+    evidence_coverage = "\n".join(
+        ["| Signal | Available | Used |", "|---|---:|---:|"]
+        + [f"| {name} | {'✓' if available else '—'} | {'✓' if available else '—'} |" for name, available in coverage_rows]
+    )
+    return {
+        "evidence_summary": evidence_summary,
+        "evidence_chain": evidence_chain,
+        "confidence_breakdown": confidence_breakdown,
+        "timeline": _timeline(bundle, metric_series),
+        "evidence_coverage": evidence_coverage,
+    }
+
+
+def _trace_observation(bundle: EvidenceBundle) -> str:
+    if not bundle.spans:
+        return "No selected traces"
+    names = ", ".join(f"`{name}`" for name in sorted({span.name for span in bundle.spans}))
+    durations = [span.duration_ms for span in bundle.spans]
+    return f"{len(bundle.spans)} selected spans ({names}); duration {min(durations):g}–{max(durations):g} ms"
+
+
+def _log_observation(logs: list[Any]) -> str:
+    if not logs:
+        return "No selected logs"
+    severities = ", ".join(sorted({log.severity for log in logs}))
+    return f"{len(logs)} selected logs with severity {severities}"
+
+
+def _metric_observation(series: list[Any]) -> str:
+    if not series:
+        return "No metric points"
+    observations = []
+    for item in series:
+        first, last = item.points[0].value, item.points[-1].value
+        observations.append(f"`{item.name}` {first:g} → {last:g}")
+    return ", ".join(observations)
+
+
+def _relevance(items: list[Any]) -> str:
+    scores = [getattr(item, "relevance_score", 0) for item in items]
+    if not items:
+        return "Unavailable"
+    return "High" if max(scores, default=0) >= 60 else "Available"
+
+
+def _timeline(bundle: EvidenceBundle, metric_series: list[Any]) -> str:
+    events: list[tuple[datetime, str]] = []
+    for span in bundle.spans:
+        timestamp = _parse_timestamp(span.timestamp)
+        if timestamp:
+            events.append((timestamp, f"Selected span `{span.name}` ({span.duration_ms:g} ms)"))
+    for log in bundle.logs[:3]:
+        timestamp = _parse_timestamp(log.timestamp)
+        if timestamp:
+            events.append((timestamp, f"{log.severity} log: {log.body}"))
+    for series in metric_series:
+        point = series.anomaly_point or series.points[-1]
+        timestamp = _parse_timestamp(point.timestamp)
+        if timestamp:
+            events.append((timestamp, f"Metric `{series.name}` value {point.value:g}"))
+    if not events:
+        return ""
+    rows = ["| Time | Evidence |", "|---|---|"]
+    for timestamp, description in sorted(events)[:8]:
+        rows.append(f"| {timestamp.isoformat().replace('+00:00', 'Z')} | {description} |")
+    return "\n".join(rows)
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)) or str(value).isdigit():
+            numeric = float(value)
+            return datetime.fromtimestamp(numeric / 1000 if numeric > 1e12 else numeric, tz=UTC)
+        timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 def _write_local_issue(title: str, body: str) -> None:

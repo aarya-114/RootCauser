@@ -17,7 +17,7 @@ RootCauser is an automated incident-investigation prototype built around determi
 - `mcp_client.py`: authenticated SigNoz v5 queries and UUID v2 rule lookup. Metrics are retrieved as builder aggregations and normalized from `aggregations[].series[].values[]` into bounded series/points. Log retrieval is optional and returns an empty list after a query failure.
 - `evidence_bundler.py`: Pydantic evidence models, nested record normalization, deterministic relevance ranking, diversity limits, and `relevance_score` / `relevance_reasons` metadata.
 - `reasoning.py`: OpenRouter request, structured response parsing, citation validation, confidence calculation, and insufficient-evidence handling.
-- `github_output.py` and `slack_output.py`: external investigation reporting.
+- `github_output.py`: deterministic GitHub incident-report facts (summary, chain, confidence signals, timeline, coverage, and raw evidence) plus the validated LLM hypothesis/remediation. `slack_output.py` sends the external notification.
 
 ## Ranking and grounding
 

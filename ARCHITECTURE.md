@@ -23,4 +23,4 @@ Traces, logs, and metrics are independent sources. Metric queries use SigNoz v5 
 
 `reasoning.py` calls OpenRouter's OpenAI-compatible chat-completions endpoint with `LLM_MODEL_NAME`. Its JSON response is accepted only when every cited ID is present in the evidence bundle. Unsupported citations, malformed output, empty evidence, and legitimate uncertainty result in an insufficient-evidence outcome rather than an invented cause.
 
-`github_output.py` creates the incident issue when configured, and `slack_output.py` sends a concise notification after the issue result is available.
+`github_output.py` creates the incident issue when configured. Its evidence summary, evidence chain, confidence breakdown, timeline, coverage table, and raw evidence bundle are generated deterministically from the selected evidence; only the hypothesis and suggested fix come from the LLM. `slack_output.py` sends a concise notification after the issue result is available.

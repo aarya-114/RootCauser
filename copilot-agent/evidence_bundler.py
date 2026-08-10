@@ -14,6 +14,7 @@ class SpanEvidence(BaseModel):
     span_id: str
     name: str
     duration_ms: float
+    timestamp: str | int | float | None = None
     is_error: bool = False
     relevance_score: int = 0
     relevance_reasons: list[str] = Field(default_factory=list)
@@ -206,6 +207,7 @@ def _span_from_raw(raw: dict[str, Any]) -> SpanEvidence:
         span_id=str(span_id),
         name=name,
         duration_ms=duration_ms,
+        timestamp=_first(raw, "timestamp", "startTime", "start_time"),
         is_error=is_error,
     )
 

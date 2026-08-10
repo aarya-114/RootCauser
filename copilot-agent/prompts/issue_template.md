@@ -17,13 +17,33 @@
 
 {cited_ids}
 
+### Evidence Summary
+
+{evidence_summary}
+
+### Evidence Chain
+
+{evidence_chain}
+
+### Confidence Breakdown
+
+**Confidence:** {confidence}
+
+{confidence_breakdown}
+
+{timeline_section}
+
+### Evidence Coverage
+
+{evidence_coverage}
+
 The evidence bundle below includes the relevant trace/span IDs, log records, and metric values used by the hypothesis. If confidence is `Insufficient Evidence`, those fields show exactly which evidence was absent.
 
 ### SigNoz Trace
 
 {trace_link}
 
-### Evidence Bundle
+### Raw Evidence Bundle
 
 ```json
 {evidence_json}
