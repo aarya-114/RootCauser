@@ -385,6 +385,18 @@ def _alert_name(alert: dict[str, Any], payload: dict[str, Any]) -> str:
 def _extract_alert_id(
     payload: dict[str, Any],
 ) -> str | None:
+    alerts = payload.get("alerts")
+    if isinstance(alerts, list):
+        for alert in alerts:
+            if not isinstance(alert, dict):
+                continue
+            labels = alert.get("labels")
+            if not isinstance(labels, dict):
+                continue
+            for key in ("ruleId", "rule_id", "alertId"):
+                if labels.get(key):
+                    return str(labels[key])
+
     for key in (
         "ruleId",
         "rule_id",

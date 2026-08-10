@@ -5,7 +5,9 @@ from scripts.signoz.specs import (
     MetricAggregation,
     MetricQuery,
 )
+from dotenv import load_dotenv 
 
+load_dotenv()    
 
 def build_slow_query_alert() -> AlertSpec:
     return AlertSpec(

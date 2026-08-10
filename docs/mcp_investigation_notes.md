@@ -1,50 +1,18 @@
-# MCP Investigation Notes
+# SigNoz API Investigation Notes
 
-## Date
-2026-07-24
+These notes describe the SigNoz behavior used by RootCauser's current REST client.
 
-## Objective
+## Endpoints in use
 
-Determine whether the local self-hosted SigNoz instance exposes a usable MCP (Model Context Protocol) server.
+- `POST /api/v5/query_range` retrieves raw traces, raw logs, and metric time series.
+- `GET /api/v2/rules/{uuid}` retrieves alert-rule details. Rule identifiers are UUIDs, not numeric v1 IDs.
 
-## Investigation
+`mcp_client.py` keeps the project-facing query interface but uses REST because the investigated local SigNoz deployment did not expose a usable MCP protocol endpoint.
 
-### Tested endpoint
+## Response handling
 
-```bash
-curl http://localhost:8080/mcp
-```
+SigNoz records can place the useful telemetry fields under `data`; the client normalizes that shape while preserving trace IDs, span IDs, timestamps, bodies, and metric points. Unsupported response shapes are logged rather than silently converted into fabricated evidence.
 
-**Result**
+## Log query limitation
 
-- HTTP Status: `200 OK`
-- Content-Type: `text/html`
-- Response body: SigNoz frontend HTML (`index.html`)
-
-This indicates that `/mcp` is routed to the frontend application rather than exposing an MCP protocol endpoint.
-
-### REST API verification
-
-```bash
-curl http://localhost:8080/api/v1/version
-```
-
-Response:
-
-```json
-{
-  "version": "v0.134.0",
-  "ee": "Y",
-  "setupCompleted": true
-}
-```
-
-The REST API is available and functioning correctly.
-
-## Conclusion
-
-No usable MCP endpoint or documented MCP tool schema was found in the local SigNoz deployment.
-
-Following ADR-04, RootCauser will use SigNoz's HTTP REST API for evidence retrieval while preserving an MCP-compatible interface inside `mcp_client.py` for future replacement.
-
-The implemented REST endpoints are `POST /api/v5/query_range` for traces, logs, and metrics and `GET /api/v2/rules/{uuid}` for alert-rule context. Rule identifiers are UUIDs; numeric `/api/v1/rules/{id}` lookup is not supported.
+Some ClickHouse-backed SigNoz installations reject `JSON_EXISTS` and `JSON_VALUE` expressions with `Functions JSON* are not supported`. RootCauser therefore requests native raw-log columns without selecting or filtering `severityText`, which can trigger those expressions. Severity is retained when SigNoz returns it. If the log request still fails, `query_logs()` logs the failure and returns `[]`; traces and metrics continue through the investigation.

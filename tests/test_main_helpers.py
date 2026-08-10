@@ -15,6 +15,19 @@ def test_manual_webhook_has_no_alert_id_and_fallback_metric() -> None:
     assert _extract_metric_name(payload, payload) == "db.query.duration"
 
 
+def test_nested_webhook_rule_id_takes_precedence() -> None:
+    payload = {
+        "ruleId": "top-level-id",
+        "alerts": [{"labels": {"ruleId": "019fec4f-f69c-73d6-8d7c-f14477f11ded"}}],
+    }
+    assert _extract_alert_id(payload) == "019fec4f-f69c-73d6-8d7c-f14477f11ded"
+
+
+def test_nested_webhook_rule_id_aliases_are_supported() -> None:
+    for key in ("rule_id", "alertId"):
+        assert _extract_alert_id({"alerts": [{"labels": {key: "real-uuid"}}]}) == "real-uuid"
+
+
 def test_alert_rule_metric_takes_precedence() -> None:
     rule = {
         "id": "019fde7f-d754-717a-b9bc-5301d4d1a484",

@@ -19,6 +19,8 @@ _API_KEY = os.environ.get("SIGNOZ_API_KEY", "")
 _QUERY_RANGE_URL = f"{_BASE_URL}/api/v5/query_range"
 _RULES_URL = f"{_BASE_URL}/api/v2/rules"
 _RETRY_DELAY_SECONDS = 2.0
+MAX_METRIC_SERIES = 20
+MAX_METRIC_POINTS = 200
 
 
 def _headers() -> dict[str, str]:
@@ -120,27 +122,26 @@ def query_logs(
     start_ms, end_ms = _to_epoch_ms(start_time), _to_epoch_ms(end_time)
     filters = [f"service.name = '{service_name}'"]
     if severity:
-        filters.append(f"severityText = '{severity.upper()}'")
+        logger.info(
+            "SigNoz log severity filter omitted because this deployment does not support JSON* extraction"
+        )
     payload = _raw_payload(
         "logs",
         start_ms,
         end_ms,
         " AND ".join(filters),
-        [
-            {"name": field, "fieldContext": context}
-            for field, context in (
-                ("body", "log"),
-                ("severityText", "log"),
-                ("traceID", "log"),
-                ("spanID", "log"),
-                ("timestamp", "log"),
-                ("resources_string", "log"),
-                ("attributes_string", "log"),
-                ("attributes_number", "log"),
-            )
-        ],
+        [],
     )
-    rows = _extract_list(_post_with_retry(_QUERY_RANGE_URL, payload), "logs")
+    # Let SigNoz return its native raw-log columns. Selecting severityText causes
+    # JSON_VALUE/JSON_EXISTS in older ClickHouse-backed SigNoz installations.
+    payload["compositeQuery"]["queries"][0]["spec"].pop("selectFields", None)
+    try:
+        rows = _extract_list(_post_with_retry(_QUERY_RANGE_URL, payload), "logs")
+    except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
+        logger.warning(
+            "SigNoz log query failed; continuing investigation without logs: %s", exc
+        )
+        return []
     normalized = [_normalize_log(row) for row in rows]
     logger.info(
         "SigNoz logs: service=%s raw=%d normalized=%d", service_name, len(rows), len(normalized)
@@ -184,8 +185,9 @@ def query_metrics(
             ]
         },
     }
-    series = _extract_series(_post_with_retry(_QUERY_RANGE_URL, payload))
-    normalized = [_normalize_series(item, metric_name) for item in series]
+    response = _post_with_retry(_QUERY_RANGE_URL, payload)
+    series = _extract_series(response)
+    normalized = [_normalize_series(item, metric_name) for item in series[:MAX_METRIC_SERIES]]
     points = sum(len(item["points"]) for item in normalized)
     logger.info(
         "SigNoz metrics: service=%s metric=%s series=%d points=%d",
@@ -262,6 +264,27 @@ def _extract_series(response: dict[str, Any]) -> list[dict[str, Any]]:
     for result in results:
         if not isinstance(result, dict):
             continue
+        # SigNoz v5 metric builder responses place time series beneath each
+        # aggregation: results[].aggregations[].series[].values[].
+        aggregations = result.get("aggregations")
+        if isinstance(aggregations, list):
+            for aggregation in aggregations:
+                if not isinstance(aggregation, dict):
+                    continue
+                aggregation_series = aggregation.get("series")
+                if not isinstance(aggregation_series, list):
+                    continue
+                for item in aggregation_series:
+                    if isinstance(item, dict):
+                        series.append(
+                            {
+                                **item,
+                                "queryName": result.get("queryName"),
+                                "aggregationAlias": aggregation.get("alias"),
+                                "aggregationMeta": aggregation.get("meta", {}),
+                            }
+                        )
+            continue
         candidates = result.get("series") or result.get("data") or result.get("values")
         if isinstance(candidates, list):
             series.extend(item for item in candidates if isinstance(item, dict))
@@ -269,6 +292,8 @@ def _extract_series(response: dict[str, Any]) -> list[dict[str, Any]]:
             series.append(result)
     if not series and results:
         logger.warning("Unsupported SigNoz metric result shape: %r", results[:1])
+    else:
+        logger.debug("SigNoz metric response normalized into %d raw series", len(series))
     return series
 
 
@@ -317,8 +342,15 @@ def _normalize_log(row: dict[str, Any]) -> dict[str, Any]:
 
 def _normalize_series(raw: dict[str, Any], requested_name: str) -> dict[str, Any]:
     record = _unwrap(raw)
-    labels = record.get("labels") or record.get("metric") or record.get("metadata") or {}
-    labels = labels if isinstance(labels, dict) else {}
+    labels: dict[str, Any] = {}
+    for candidate in (
+        record.get("metric"),
+        record.get("metadata"),
+        record.get("labels"),
+        record.get("aggregationMeta"),
+    ):
+        if isinstance(candidate, dict):
+            labels.update(candidate)
     name = (
         _value(record, "name", "metricName", "metric_name")
         or labels.get("__name__")
@@ -331,7 +363,11 @@ def _normalize_series(raw: dict[str, Any], requested_name: str) -> dict[str, Any
     if not isinstance(points, list):
         logger.warning("Unsupported SigNoz metric series shape: %r", raw)
         points = []
-    return {"name": str(name), "labels": labels, "points": points}
+    return {
+        "name": str(name),
+        "labels": labels,
+        "points": points[:MAX_METRIC_POINTS],
+    }
 
 
 def _resource_value(row: dict[str, Any], key: str) -> Any:

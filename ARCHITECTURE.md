@@ -1,80 +1,26 @@
 # RootCauser Architecture
 
-## High-Level Architecture
-
-```mermaid
-flowchart TB
-    subgraph Demo["Demo Microservice"]
-        APP[FastAPI App]
-        BUG1[Slow DB Query]
-        BUG2[Downstream Timeout]
-    end
-    subgraph Telemetry["Telemetry Pipeline"]
-        SDK[OTel SDK]
-        COLLECTOR[OTel Collector]
-    end
-    subgraph Obs["SigNoz"]
-        SIGNOZ[SigNoz Query Service + ClickHouse]
-        ALERTS[Alert Rules + Webhook]
-    end
-    subgraph Agent["copilot-agent"]
-        WEBHOOK[Webhook Receiver]
-        MCP[MCP/REST Fallback Client]
-        BUNDLE[Evidence Bundler]
-        REASON[LLM Reasoning]
-        GH[GitHub Output]
-        SLACK[Slack Output - optional]
-    end
-    APP --> SDK --> COLLECTOR --> SIGNOZ
-    BUG1 --> APP
-    BUG2 --> APP
-    SIGNOZ --> ALERTS --> WEBHOOK
-    WEBHOOK --> MCP --> SIGNOZ
-    MCP --> BUNDLE --> REASON --> GH
-    GH --> SLACK
+```text
+SigNoz Alert → FastAPI Webhook → Evidence Retrieval → Deterministic Ranking
+→ LLM Reasoning → Citation Validation → GitHub Issue / Slack Notification
 ```
 
-## Incident Sequence
+`demo-service` emits OpenTelemetry traces, logs, and metrics through the collector to SigNoz. SigNoz alerts call `copilot-agent/main.py` at `POST /webhook/alert`.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Demo as demo-service
-    participant SigNoz
-    participant Agent as copilot-agent
-    participant LLM
-    participant GitHub
+The webhook extracts the service and incident window. Real SigNoz payloads can provide the rule UUID at `alerts[0].labels.ruleId`; RootCauser resolves it through `GET /api/v2/rules/{uuid}`. Evidence retrieval uses `POST /api/v5/query_range` for traces, logs, and metrics.
 
-    User->>Demo: curl /orders?inject_bug=slow_query
-    Demo->>SigNoz: traces, logs, metrics via OTel
-    SigNoz->>Agent: POST /webhook/alert
-    Agent-->>SigNoz: 200 accepted
-    Agent->>SigNoz: query traces/logs/metrics
-    Agent->>LLM: one structured reasoning request
-    Agent->>Agent: validate cited IDs against evidence
-    Agent->>GitHub: create issue
-```
+## Deterministic evidence before reasoning
 
-## ADR Summary
+The LLM is not responsible for telemetry retrieval or relevance selection. `evidence_bundler.py` ranks evidence first using service match, alert/rule/composite-query semantics, trace and log correlation, multiple spans in one trace, alert-time proximity, error/WARN status, secondary duration, health penalties, duplicate suppression, and per-trace diversity limits. Selected spans and logs include `relevance_score` and `relevance_reasons`.
 
-**ADR-01: Modular Monolith Agent**  
-`copilot-agent` is one deployable FastAPI service split into modules, not multiple microservices.
+This keeps the LLM input bounded and auditable. It also prevents an unrelated long-running health span from winning solely because of duration.
 
-**ADR-02: Single LLM Call**  
-Each incident uses one structured LLM request. Evidence retrieval and confidence scoring stay deterministic Python logic.
+## Graceful evidence handling
 
-**ADR-03: Rule-Based Confidence**  
-Confidence is computed from verified citation types. Span plus metric gives High; one signal gives Medium; weak accepted evidence gives Low.
+Traces, logs, and metrics are independent sources. Metric queries use SigNoz v5 builder aggregations and normalize the returned `aggregations[].series[].values[]` timestamp/value records into bounded evidence series. SigNoz log querying can be unavailable on deployments that reject JSON* expressions; the log client returns an empty list after logging the failure so trace and metric investigation continues. No telemetry is fabricated.
 
-**ADR-04: MCP First, REST Fallback**  
-The local SigNoz deployment did not expose a usable MCP endpoint, so `mcp_client.py` uses a REST fallback while preserving the same public function signatures.
+## Reasoning and outputs
 
-**ADR-05: No Database in MVP**  
-The agent is stateless. Local Markdown issue artifacts are written only as a demo fallback, not as durable application storage.
+`reasoning.py` calls OpenRouter's OpenAI-compatible chat-completions endpoint with `LLM_MODEL_NAME`. Its JSON response is accepted only when every cited ID is present in the evidence bundle. Unsupported citations, malformed output, empty evidence, and legitimate uncertainty result in an insufficient-evidence outcome rather than an invented cause.
 
-## Non-Negotiable Guardrail
-
-Every LLM-produced citation must be verified against the evidence bundle. If any cited trace ID, span ID, or metric name is absent, the hypothesis is rejected and returned as `Insufficient Evidence`.
-## Evidence retrieval and grounding
-
-The agent uses SigNoz REST `POST /api/v5/query_range` for raw traces/logs and time-series metrics. A production alert rule UUID is resolved with `GET /api/v2/rules/{uuid}` (not the old numeric v1 route). Rule semantics, service, trace/log correlation, alert-time proximity, errors, and duration guide deterministic evidence ranking; health/readiness/liveness spans are penalized unless the alert concerns health. Selected spans and logs expose deterministic scores and reasons, while duplicate evidence is capped for diversity. OpenRouter is the reasoning provider, configured by `LLM_MODEL_NAME`; strict citation validation gates GitHub Issue and Slack delivery.
+`github_output.py` creates the incident issue when configured, and `slack_output.py` sends a concise notification after the issue result is available.
