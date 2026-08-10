@@ -72,6 +72,8 @@ def parse_and_validate_hypothesis(
             "The model cited an ID that is not present in the evidence bundle.",
         )
 
+    hypothesis.suggested_fix = _ground_timeout_remediation(hypothesis.suggested_fix, bundle)
+
     hypothesis.confidence = _compute_confidence(
         hypothesis.cited_ids,
         bundle,
@@ -203,6 +205,24 @@ def _compute_confidence(
         return "Medium"
 
     return "Low"
+
+
+def _ground_timeout_remediation(suggested_fix: str, bundle: EvidenceBundle) -> str:
+    """Do not present an unqualified timeout increase as the confirmed root fix."""
+    normalized = suggested_fix.lower()
+    timeout_evidence = any("timeout" in span.name.lower() for span in bundle.spans) or any(
+        "timeout" in log.body.lower() for log in bundle.logs
+    )
+    direct_increase = any(term in normalized for term in ("increase", "raise", "extend")) and (
+        "timeout" in normalized
+    )
+    qualified = any(term in normalized for term in ("consider", "may", "mitigation", "temporary"))
+    if timeout_evidence and direct_increase and not qualified:
+        return (
+            "Investigate the downstream dependency latency/root cause first; "
+            "consider a timeout increase only as a mitigation."
+        )
+    return suggested_fix
 
 
 def _read_prompt(filename: str) -> str:

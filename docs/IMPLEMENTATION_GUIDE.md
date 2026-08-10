@@ -5,7 +5,7 @@ RootCauser is an automated incident-investigation prototype built around determi
 ## Runtime flow
 
 1. `copilot-agent/main.py` receives `POST /webhook/alert`, validates the optional shared secret, and starts background processing.
-2. It extracts the service, time window, and rule UUID. A real SigNoz UUID may be at `payload["alerts"][0]["labels"]["ruleId"]`.
+2. It extracts the service, time window, firing alert name, and rule UUID. A real SigNoz UUID may be at `payload["alerts"][0]["labels"]["ruleId"]`; the webhook alert name is retained when fetched rule details are used for output rendering.
 3. `copilot-agent/mcp_client.py` retrieves traces, logs, metrics, and rule details from SigNoz REST.
 4. `copilot-agent/evidence_bundler.py` normalizes and ranks the available records into `EvidenceBundle`.
 5. `copilot-agent/reasoning.py` sends the bundle to OpenRouter and validates the returned JSON citations.
@@ -23,7 +23,7 @@ RootCauser is an automated incident-investigation prototype built around determi
 
 Ranking occurs before LLM reasoning. It uses service match, alert-rule/composite-query semantics, trace and log IDs, trace membership, alert-time proximity, error/WARN status, secondary duration, health penalties, duplicate suppression, and per-trace limits. This is deterministic so that evidence selection can be tested and reviewed separately from model behavior.
 
-The LLM is asked to reason only from the selected bundle. A cited trace ID, span ID, or metric name must be literally present in that bundle. Invalid citations, malformed output, unavailable telemetry, and model-declared uncertainty produce an insufficient-evidence result rather than an unsupported root cause.
+The LLM is asked to reason only from the selected bundle. A cited trace ID, span ID, or metric name must be literally present in that bundle. Invalid citations, malformed output, unavailable telemetry, and model-declared uncertainty produce an insufficient-evidence result rather than an unsupported root cause. For observed timeouts, timeout increases are treated only as mitigations; dependency latency/root-cause investigation remains the recommendation.
 
 ## External dependencies
 

@@ -189,6 +189,12 @@ def query_metrics(
     series = _extract_series(response)
     normalized = [_normalize_series(item, metric_name) for item in series[:MAX_METRIC_SERIES]]
     points = sum(len(item["points"]) for item in normalized)
+    if not normalized or not points:
+        logger.info(
+            "SigNoz metric query returned no usable data: service=%s metric=%s",
+            service_name,
+            metric_name,
+        )
     logger.info(
         "SigNoz metrics: service=%s metric=%s series=%d points=%d",
         service_name,

@@ -6,7 +6,12 @@ from pathlib import Path
 AGENT_PATH = Path(__file__).resolve().parents[1] / "copilot-agent"
 sys.path.insert(0, str(AGENT_PATH))
 
-from main import _extract_alert_id, _extract_metric_name, _incident_context  # noqa: E402
+from main import (  # noqa: E402
+    _extract_alert_id,
+    _extract_metric_name,
+    _incident_context,
+    _preserve_webhook_alert_name,
+)
 
 
 def test_manual_webhook_has_no_alert_id_and_fallback_metric() -> None:
@@ -26,6 +31,16 @@ def test_nested_webhook_rule_id_takes_precedence() -> None:
 def test_nested_webhook_rule_id_aliases_are_supported() -> None:
     for key in ("rule_id", "alertId"):
         assert _extract_alert_id({"alerts": [{"labels": {key: "real-uuid"}}]}) == "real-uuid"
+
+
+def test_webhook_alert_name_is_preserved_for_output_context() -> None:
+    payload = {
+        "alerts": [
+            {"labels": {"alertname": "rootcauser-downstream-payment-timeout"}}
+        ]
+    }
+    context = _preserve_webhook_alert_name({"name": "rule metadata"}, payload)
+    assert context["alertname"] == "rootcauser-downstream-payment-timeout"
 
 
 def test_alert_rule_metric_takes_precedence() -> None:

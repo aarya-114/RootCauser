@@ -7,7 +7,13 @@ from pathlib import Path
 AGENT_PATH = Path(__file__).resolve().parents[1] / "copilot-agent"
 sys.path.insert(0, str(AGENT_PATH))
 
-from evidence_bundler import EvidenceBundle, MetricPoint, MetricSeries, SpanEvidence  # noqa: E402
+from evidence_bundler import (  # noqa: E402
+    EvidenceBundle,
+    LogEvidence,
+    MetricPoint,
+    MetricSeries,
+    SpanEvidence,
+)
 from reasoning import parse_and_validate_hypothesis  # noqa: E402
 
 
@@ -113,3 +119,33 @@ def test_invalid_citation_has_distinct_status() -> None:
         parse_and_validate_hypothesis(response, _bundle()).result_status
         == "CITATION_VALIDATION_FAILED"
     )
+
+
+def test_unqualified_timeout_increase_is_not_presented_as_root_fix() -> None:
+    bundle = EvidenceBundle(
+        spans=[
+            SpanEvidence(
+                trace_id="trace", span_id="span", name="payment call", duration_ms=1500
+            )
+        ],
+        logs=[
+            LogEvidence(
+                timestamp="1",
+                severity="ERROR",
+                body="payment API timeout",
+                trace_id="trace",
+                span_id="span",
+            )
+        ],
+    )
+    response = json.dumps(
+        {
+            "summary": "Payment API calls repeatedly timed out after 1.5 seconds.",
+            "cited_ids": ["span"],
+            "suggested_fix": "Increase the timeout threshold.",
+            "insufficient_evidence": False,
+        }
+    )
+    hypothesis = parse_and_validate_hypothesis(response, bundle)
+    assert "Investigate the downstream dependency latency/root cause first" in hypothesis.suggested_fix
+    assert "only as a mitigation" in hypothesis.suggested_fix

@@ -8,6 +8,7 @@ sys.path.insert(0, str(AGENT_PATH))
 
 import mcp_client  # noqa: E402
 import requests  # noqa: E402
+from evidence_bundler import build_evidence_bundle  # noqa: E402
 
 
 def test_extracts_nested_query_rows_and_normalizes_trace() -> None:
@@ -92,6 +93,38 @@ def test_extracts_current_v5_aggregation_metric_shape() -> None:
     assert normalized["name"] == "db.query.duration.sum"
     assert normalized["labels"] == {"service.name": "demo-service", "route": "/orders"}
     assert normalized["points"] == [{"timestamp": 1786378920000, "value": 2000.171}]
+
+
+def test_valid_downstream_metric_is_included_in_evidence_bundle(monkeypatch) -> None:
+    response = {
+        "data": {
+            "data": {
+                "results": [
+                    {
+                        "queryName": "A",
+                        "aggregations": [
+                            {
+                                "series": [
+                                    {
+                                        "values": [
+                                            {"timestamp": 1786381560000, "value": 4.5},
+                                            {"timestamp": 1786381620000, "value": 5.75},
+                                        ]
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+    monkeypatch.setattr(mcp_client, "_post_with_retry", lambda *_args: response)
+    metrics = mcp_client.query_metrics("demo-service", "downstream.errors", 1, 2)
+    bundle = build_evidence_bundle([], [], metrics)
+    assert bundle.metrics[0].name == "downstream.errors"
+    assert bundle.metrics[0].points[0].value == 4.5
+    assert bundle.metrics[0].max_value == 5.75
 
 
 def test_metric_series_and_points_are_bounded() -> None:

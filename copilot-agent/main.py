@@ -106,6 +106,8 @@ def process_alert(payload: dict[str, Any]) -> None:
                 alert_id,
             )
 
+    alert_details = _preserve_webhook_alert_name(alert_details, payload)
+
     # ---------------------------------------------------------
     # 3. Retrieve observability evidence
     # ---------------------------------------------------------
@@ -379,7 +381,27 @@ def _alert_name(alert: dict[str, Any], payload: dict[str, Any]) -> str:
                 nested = value.get("name")
                 if nested:
                     return str(nested)
+        alerts = source.get("alerts")
+        if isinstance(alerts, list):
+            for item in alerts:
+                labels = item.get("labels") if isinstance(item, dict) else None
+                if not isinstance(labels, dict):
+                    continue
+                for key in ("alertname", "alertName", "ruleName", "rule_name"):
+                    if labels.get(key):
+                        return str(labels[key])
     return "unknown-alert"
+
+
+def _preserve_webhook_alert_name(
+    alert_details: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the firing webhook's name when rule lookup returns only rule metadata."""
+    context = dict(alert_details)
+    webhook_name = _alert_name(payload, {})
+    if webhook_name != "unknown-alert":
+        context["alertname"] = webhook_name
+    return context
 
 
 def _extract_alert_id(
