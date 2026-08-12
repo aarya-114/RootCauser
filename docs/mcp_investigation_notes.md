@@ -1,18 +1,27 @@
-# SigNoz API Investigation Notes
+# SigNoz API & Protocol Notes
 
-These notes describe the SigNoz behavior used by RootCauser's current REST client.
+This document records technical details regarding SigNoz API endpoints and integration design decisions.
 
-## Endpoints in use
+---
 
-- `POST /api/v5/query_range` retrieves raw traces, raw logs, and metric time series.
-- `GET /api/v2/rules/{uuid}` retrieves alert-rule details. Rule identifiers are UUIDs, not numeric v1 IDs.
+## REST Endpoint Specifications
 
-`mcp_client.py` keeps the project-facing query interface but uses REST because the investigated local SigNoz deployment did not expose a usable MCP protocol endpoint.
+RootCauser interacts directly with SigNoz REST endpoints:
+* **Query Range API (`POST /api/v5/query_range`):** Used for retrieving raw trace spans, raw log records, and metric time series aggregations.
+* **Rules API (`GET /api/v2/rules/{uuid}`):** Used for resolving alert rule definitions. Rule identifiers are UUIDs.
 
-## Response handling
+---
 
-SigNoz records can place the useful telemetry fields under `data`; the client normalizes that shape while preserving trace IDs, span IDs, timestamps, bodies, and metric points. Metric time-series are normalized from the v5 builder response shape that carries aggregations, series, and point values. Unsupported response shapes are logged rather than silently converted into fabricated evidence.
+## Historical MCP Protocol Naming Context
 
-## Log query limitation
+The module retains the filename [`copilot-agent/mcp_client.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/mcp_client.py) from earlier protocol research. However, because local SigNoz Docker deployments expose stable v5/v2 HTTP REST endpoints rather than a live Model Context Protocol (MCP) server, the client executes direct REST calls via Python `requests`.
 
-Some ClickHouse-backed SigNoz installations reject `JSON_EXISTS` and `JSON_VALUE` expressions with `Functions JSON* are not supported`. RootCauser therefore requests native raw-log columns without selecting or filtering `severityText`, which can trigger those expressions. Severity is retained when SigNoz returns it. If the log request still fails, `query_logs()` logs the failure and returns `[]`; traces and metrics continue through the investigation.
+---
+
+## SigNoz Response Parsing & Fallback Behavior
+
+### 1. Nested Record Unwrapping
+SigNoz query responses wrap telemetry fields under a inner `data` dictionary. `_unwrap_data()` normalizes this shape while preserving `traceID`, `spanID`, `timestamp`, and duration fields.
+
+### 2. Log Query SQL Compatibility Fallback
+Certain ClickHouse-backed SigNoz installations reject queries selecting or filtering `severityText` with `Functions JSON* are not supported`. `mcp_client.py` strips `selectFields` for log queries. If log querying still fails due to database errors, `query_logs()` logs a warning and returns an empty list `[]`. Telemetry triage proceeds using available trace and metric data.

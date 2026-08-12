@@ -1,32 +1,54 @@
 # Implementation Guide
 
-RootCauser is an automated incident-investigation prototype built around deterministic evidence selection and grounded LLM reasoning.
+RootCauser is an automated incident-investigation prototype built around deterministic evidence selection, grounded LLM reasoning, and stateful GitHub incident reporting.
 
-## Runtime flow
+---
 
-1. `copilot-agent/main.py` receives `POST /webhook/alert`, validates the optional shared secret, and starts background processing.
-2. It extracts the service, time window, firing alert name, and rule UUID. A real SigNoz UUID may be at `payload["alerts"][0]["labels"]["ruleId"]`; the webhook alert name is retained when fetched rule details are used for output rendering.
-3. `copilot-agent/mcp_client.py` retrieves traces, logs, metrics, and rule details from SigNoz REST.
-4. `copilot-agent/evidence_bundler.py` normalizes and ranks the available records into `EvidenceBundle`.
-5. `copilot-agent/reasoning.py` sends the bundle to OpenRouter and validates the returned JSON citations.
-6. `github_output.py` renders and creates the incident issue; `slack_output.py` sends its follow-up notification when configured.
+## Runtime Workflow
 
-## Module responsibilities
+1. **Webhook Ingestion:** [`copilot-agent/main.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/main.py) receives `POST /webhook/alert`, checks the optional `X-Rootcauser-Secret` header, and schedules background triage via FastAPI `BackgroundTasks`.
+2. **Context Extraction:** `process_alert()` extracts the target service name, time window, firing alert name, status (`FIRING`/`RESOLVED`), and alert rule UUID (`alerts[0].labels.ruleId`).
+3. **Telemetry Retrieval:** [`copilot-agent/mcp_client.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/mcp_client.py) queries traces, logs, metrics, and rule details from SigNoz REST endpoints (`POST /api/v5/query_range` and `GET /api/v2/rules/{uuid}`).
+4. **Deterministic Bundling:** [`copilot-agent/evidence_bundler.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/evidence_bundler.py) normalizes telemetry records, scores relevance, applies diversity limits, and builds an `EvidenceBundle`.
+5. **LLM Reasoning & Validation:** [`copilot-agent/reasoning.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/reasoning.py) sends the bundle to OpenRouter (`gpt-4o-mini`) and programmatically verifies that all returned citations exist in the bundle.
+6. **Incident State & Output:** [`copilot-agent/github_output.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/github_output.py) computes a SHA-256 fingerprint from service, alert name, and normalized labels to create or update the GitHub issue with `Incident Version` tracking. [`copilot-agent/slack_output.py`](file:///c:/Users/Om/Desktop/RootCauser/copilot-agent/slack_output.py) dispatches a Slack summary notification.
 
-- `main.py`: webhook parsing, alert context, retrieval orchestration, and investigation logging.
-- `mcp_client.py`: authenticated SigNoz v5 queries and UUID v2 rule lookup. Metrics are retrieved as builder aggregations and normalized from `aggregations[].series[].values[]` into bounded series/points. Log retrieval is optional and returns an empty list after a query failure.
-- `evidence_bundler.py`: Pydantic evidence models, nested record normalization, deterministic relevance ranking, diversity limits, and `relevance_score` / `relevance_reasons` metadata.
-- `reasoning.py`: OpenRouter request, structured response parsing, citation validation, confidence calculation, and insufficient-evidence handling.
-- `github_output.py`: deterministic GitHub incident-report facts (summary, chain, confidence signals, timeline, coverage, and raw evidence) plus the validated LLM hypothesis/remediation. `slack_output.py` sends the external notification.
+---
 
-`github_output.py` also owns lightweight active-incident versioning. It uses a deterministic incident fingerprint derived from the service, alert name, and normalized labels preserved by `main.py`, updates the existing GitHub issue for repeated firings, and includes `Incident Version` in each report. The map is process-local; `RESOLVED` marks the matching open incident as resolved so a later firing creates a new Version 1 issue.
+## Module Breakdown
 
-## Ranking and grounding
+### `copilot-agent/main.py`
+* Serves `/webhook/alert` and `/health` endpoints.
+* Extracts service name, incident time window (default: 10m), and rule UUID.
+* Handles explicit `RESOLVED` status notifications by marking active incident fingerprints resolved.
 
-Ranking occurs before LLM reasoning. It uses service match, alert-rule/composite-query semantics, trace and log IDs, trace membership, alert-time proximity, error/WARN status, secondary duration, health penalties, duplicate suppression, and per-trace limits. This is deterministic so that evidence selection can be tested and reviewed separately from model behavior.
+### `copilot-agent/mcp_client.py`
+* Interacts with SigNoz REST v5 `/api/v5/query_range` and v2 rules `/api/v2/rules/{uuid}` APIs.
+* Normalizes raw trace, log, and metric JSON structures.
+* Handles ClickHouse raw log query fallback: if log query fails, logs warning and returns `[]`, allowing trace/metric triage to continue.
 
-The LLM is asked to reason only from the selected bundle. A cited trace ID, span ID, or metric name must be literally present in that bundle. Invalid citations, malformed output, unavailable telemetry, and model-declared uncertainty produce an insufficient-evidence result rather than an unsupported root cause. For observed timeouts, timeout increases are treated only as mitigations; dependency latency/root-cause investigation remains the recommendation.
+### `copilot-agent/evidence_bundler.py`
+* Encapsulates evidence data contracts (`SpanEvidence`, `LogEvidence`, `MetricSeries`, `EvidenceBundle`).
+* Scores spans on semantic matches (+35), log correlation (+70-100), errors (+40), proximity (+15-30), while applying health penalties (-120).
+* Enforces per-trace diversity limits (max 2 spans per trace, max 5 spans total).
 
-## External dependencies
+### `copilot-agent/reasoning.py`
+* Calls OpenRouter OpenAI-compatible chat completions API with `temperature=0.1` and `json_object` format.
+* Validates literal evidence citations against `bundle.searchable_text()`. Returns `CITATION_VALIDATION_FAILED` status if unverified IDs exist.
+* Applies `_ground_timeout_remediation()` to re-frame timeout increases as mitigations rather than confirmed root fixes.
 
-SigNoz is the telemetry source. OpenRouter is used through `https://openrouter.ai/api/v1/chat/completions` with the configurable `LLM_MODEL_NAME`. GitHub issue creation and Slack notification require their respective configured credentials. These dependencies are intentionally optional for local unit testing.
+### `copilot-agent/github_output.py` & `copilot-agent/slack_output.py`
+* Generates GFM markdown report sections (Evidence Summary, Evidence Chain, Confidence Breakdown, Timeline, Coverage).
+* Maintains in-memory `_ACTIVE_INCIDENTS` map to PATCH active issues and increment version numbers.
+* Sends formatted Slack alerts when `SLACK_WEBHOOK_URL` is configured.
+
+---
+
+## Testing & Verification
+
+Unit tests in `tests/` execute completely offline without live SigNoz or OpenRouter APIs:
+
+```powershell
+venv\Scripts\python.exe -m pytest -v
+venv\Scripts\python.exe -m ruff check copilot-agent tests
+```

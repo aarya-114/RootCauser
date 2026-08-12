@@ -1,28 +1,34 @@
-# Failure Scenarios
+# Failure Scenarios & Scope Boundaries
 
-RootCauser's locked MVP implements exactly 2 seeded incidents. The remaining scenarios are documented roadmap items, not incomplete MVP work.
+RootCauser currently implements two seeded failure scenarios inside `demo-service`. Additional failure modes are documented roadmap items.
 
-## Implemented
+---
 
-1. Slow database query  
-   Trigger: `GET /orders?inject_bug=slow_query`  
-   Signals: `db.orders.slow_query` span, warning log, `db.query.duration` metric.
-   Incident behavior: repeated firings before `RESOLVED` update the same GitHub issue and increment Incident Version.
+## 1. Implemented Failure Scenarios
 
-2. Downstream payment API timeout  
-   Trigger: `GET /orders?inject_bug=flaky_downstream`  
-   Signals: `downstream.payment_api.call` error span, error log, `downstream.errors` metric.
-   Incident behavior: after a reliable `RESOLVED`, the next firing starts a new Version 1 incident issue.
+### Scenario 1: Slow Database Query (`slow_query`)
+* **Trigger Endpoint:** `GET /orders?inject_bug=slow_query`
+* **Telemetry Produced:**
+  * Trace span `db.orders.slow_query` (duration ~2000ms).
+  * WARN log `"Slow query detected: db.orders.slow_query took 2000 ms"`.
+  * Metric histogram `db.query.duration`.
+* **Triage Outcome:** RootCauser identifies database latency in `slow_query.py`, cites span and metric IDs, and creates/updates a GitHub issue.
 
-## Roadmap Only
+### Scenario 2: Downstream Payment API Timeout (`flaky_downstream`)
+* **Trigger Endpoint:** `GET /orders?inject_bug=flaky_downstream`
+* **Telemetry Produced:**
+  * ERROR trace span `downstream.payment_api.call` (status: `StatusCode.ERROR`).
+  * ERROR log `"Downstream call failed: payment-api timed out"`.
+  * Metric counter `downstream.errors`.
+* **Triage Outcome:** RootCauser identifies downstream timeout, applies remediation grounding (suggesting latency investigation before timeout increases), and creates/updates a GitHub issue.
 
-3. Elevated HTTP 5xx rate across one route.
-4. Memory pressure or container restart loop.
-5. Queue backlog causing delayed processing.
-6. External dependency returning 429 rate limits.
-7. Bad deploy causing a new exception class.
-8. Database connection pool exhaustion.
-9. Regional latency spike.
-10. Missing telemetry or broken instrumentation.
+---
 
-These are intentionally excluded from the MVP to keep the demo focused and reliable.
+## 2. Future Roadmap Scenarios (Unimplemented)
+
+The following failure modes are planned future extensions:
+1. HTTP 5xx rate spikes across multiple microservices.
+2. Memory pressure and container OOMKilled restart loops.
+3. Message queue processing backlog delays.
+4. Database connection pool exhaustion.
+5. Regional network latency degradation.

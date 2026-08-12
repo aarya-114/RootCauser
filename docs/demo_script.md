@@ -1,81 +1,69 @@
-# RootCauser Demo Script
+# RootCauser Live Demonstration Script
 
-Target length: 5-7 minutes.
+Target Duration: 5-7 Minutes.
 
-## 0:00-0:45 — Show the System
+---
 
-Open:
+## 0:00-1:00 — Stack Verification & Overview
 
-- SigNoz: `http://localhost:8080`
-- Demo API: `http://localhost:8000/health`
-- Copilot agent health: `http://localhost:8001/health`
+Open in browser:
+* **SigNoz UI:** `http://localhost:8080`
+* **Demo API Health:** `http://localhost:8000/health`
+* **Copilot Agent Health:** `http://localhost:8001/health`
 
-Say: RootCauser turns SigNoz alerts into evidence-cited GitHub Issues.
+**Talking Point:**
+> "RootCauser is an automated incident triage engine. It intercepts SigNoz alert webhooks, deterministically collects and ranks telemetry, runs citation-checked LLM root-cause synthesis, and manages versioned incident reports in GitHub and Slack."
 
-## 0:45-1:30 — Baseline Traffic
+---
 
-```bash
-curl http://localhost:8000/orders
+## 1:00-2:30 — Scenario 1: Slow Database Query
+
+Execute bug injection:
+```powershell
+Invoke-RestMethod "http://localhost:8000/orders?inject_bug=slow_query"
 ```
 
-Show that the service responds normally and produces regular traces.
+Point out in SigNoz & Agent logs:
+* Span `db.orders.slow_query` (duration ~2000ms).
+* WARN log message `"Slow query detected"`.
+* Metric histogram `db.query.duration`.
+* Agent logs: `Evidence bundle created: spans=... logs=... metrics=...`.
 
-## 1:30-3:15 — Slow Query Incident
+**Expected Result:** A GitHub issue created with `Incident Version: 1`, high confidence, citing span ID and metric `db.query.duration`.
 
-```bash
-curl "http://localhost:8000/orders?inject_bug=slow_query"
+---
+
+## 2:30-4:00 — Scenario 2: Downstream Payment API Timeout
+
+Execute bug injection:
+```powershell
+Invoke-RestMethod "http://localhost:8000/orders?inject_bug=flaky_downstream"
 ```
 
 Point out:
+* ERROR span `downstream.payment_api.call`.
+* ERROR log message `"Downstream call failed: payment-api timed out"`.
+* Metric counter `downstream.errors`.
 
-- Manual span: `db.orders.slow_query`
-- Warning log for the slow query
-- Metric: `db.query.duration`
-- SigNoz alert transitions to firing after the configured evaluation interval
+**Expected Result:** A separate GitHub issue created detailing external dependency timeout in `flaky_downstream.py`.
 
-Expected agent result: a GitHub Issue with a hypothesis about slow order lookup/database query latency.
-If the same alert keeps firing before it resolves, RootCauser should update the same GitHub issue and increment the incident version instead of creating duplicates.
+---
 
-## 3:15-5:00 — Downstream Timeout Incident
+## 4:00-5:30 — Citation Guardrails & Incident Versioning
 
-```bash
-curl "http://localhost:8000/orders?inject_bug=flaky_downstream"
-```
+1. Open the created GitHub Issue.
+2. Show the **Evidence Summary Table**, **Evidence Chain**, **Confidence Breakdown**, and **Cited Telemetry IDs**.
+3. Highlight that any hallucinated trace ID causes immediate rejection (`CITATION_VALIDATION_FAILED`).
+4. Re-fire the alert and show that `github_output.py` updates the same issue body, incrementing `Incident Version: 2`.
 
-Point out:
-
-- Manual span: `downstream.payment_api.call`
-- Error status and recorded exception
-- Error log for payment API timeout
-- Metric: `downstream.errors`
-
-Expected agent result: a separate GitHub Issue with a downstream timeout hypothesis.
-If the alert resolves and later fires again, RootCauser should start a new issue at Version 1 for the new incident.
-
-## 5:00-6:30 — Evidence Guardrail
-
-Open the created issue and highlight:
-
-- Confidence label
-- Literal cited IDs
-- Evidence bundle
-- Suggested fix
-
-Say: If the LLM cites an ID that is not present in the bundle, RootCauser rejects the answer as `Insufficient Evidence`.
+---
 
 ## Pre-Demo Checklist
 
-```bash
+```powershell
+# Verify environment and start stack
 cp .env.example .env
-# Fill LLM_API_KEY, GITHUB_TOKEN, GITHUB_REPO
-make down
-make up
-curl http://localhost:8000/health
-curl http://localhost:8001/health
-```
-
-Confirm SigNoz alert rules point to:
-
-```text
-http://copilot-agent:8001/webhook/alert
+docker compose up -d --build
+Invoke-RestMethod http://localhost:8000/health
+Invoke-RestMethod http://localhost:8001/health
 ```
