@@ -10,7 +10,7 @@ import mcp_client
 from config import get_settings
 from evidence_bundler import build_evidence_bundle
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
-from github_output import clear_active_incident, create_github_issue
+from github_output import create_github_issue, resolve_incident
 from reasoning import analyze_incident
 from slack_output import send_slack_notification
 
@@ -78,19 +78,6 @@ def process_alert(payload: dict[str, Any]) -> None:
     alert_id = _extract_alert_id(payload)
     alert_status = _extract_alert_status(payload)
 
-    if alert_status == "RESOLVED":
-        clear_active_incident(alert_id)
-        logger.info("Resolved alert cleared from active incident state: alert_id=%s", alert_id)
-        return
-
-    logger.info(
-        "Investigating service=%s window=%s..%s alert_id=%s",
-        service_name,
-        start_time,
-        end_time,
-        alert_id,
-    )
-
     # ---------------------------------------------------------
     # 2. Retrieve the actual SigNoz alert definition
     # ---------------------------------------------------------
@@ -115,6 +102,24 @@ def process_alert(payload: dict[str, Any]) -> None:
     alert_details = _preserve_webhook_alert_name(alert_details, payload)
     if alert_id:
         alert_details["_incident_identity"] = alert_id
+
+    if alert_status == "RESOLVED":
+        resolve_incident(service_name, alert_details)
+        logger.info(
+            "Resolved alert marked closed for incident fingerprint: service=%s alert=%s alert_id=%s",
+            service_name,
+            _alert_name(alert_details, payload),
+            alert_id,
+        )
+        return
+
+    logger.info(
+        "Investigating service=%s window=%s..%s alert_id=%s",
+        service_name,
+        start_time,
+        end_time,
+        alert_id,
+    )
 
     # ---------------------------------------------------------
     # 3. Retrieve observability evidence

@@ -11,7 +11,7 @@ These notes describe the SigNoz behavior used by RootCauser's current REST clien
 
 ## Response handling
 
-SigNoz records can place the useful telemetry fields under `data`; the client normalizes that shape while preserving trace IDs, span IDs, timestamps, bodies, and metric points. Unsupported response shapes are logged rather than silently converted into fabricated evidence.
+SigNoz records can place the useful telemetry fields under `data`; the client normalizes that shape while preserving trace IDs, span IDs, timestamps, bodies, and metric points. Metric time-series are normalized from the v5 builder response shape that carries aggregations, series, and point values. Unsupported response shapes are logged rather than silently converted into fabricated evidence.
 
 ## Log query limitation
 

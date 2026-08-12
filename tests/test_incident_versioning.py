@@ -30,6 +30,10 @@ def _hypothesis() -> RootCauseHypothesis:
 def test_first_firing_creates_version_one_issue(monkeypatch) -> None:
     github_output._ACTIVE_INCIDENTS.clear()
     calls: list[dict[str, object]] = []
+    alert = {
+        "alertname": "rootcauser-downstream-payment-timeout",
+        "labels": {"serviceName": "demo-service", "severity": "critical"},
+    }
     monkeypatch.setattr(github_output, "get_settings", lambda: _settings())
     monkeypatch.setattr(github_output, "_write_local_issue", lambda *_args: None)
     monkeypatch.setattr(
@@ -37,7 +41,7 @@ def test_first_firing_creates_version_one_issue(monkeypatch) -> None:
         "post",
         lambda _url, **kwargs: calls.append(kwargs["json"]) or _Response(10, "https://issue/10"),
     )
-    url = github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), {"id": "rule-a"})
+    url = github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
     assert url == "https://issue/10"
     assert "Incident Version:** 1" in str(calls[0]["body"])
 
@@ -45,21 +49,53 @@ def test_first_firing_creates_version_one_issue(monkeypatch) -> None:
 def test_repeated_firing_updates_same_issue_and_increments_version(monkeypatch) -> None:
     github_output._ACTIVE_INCIDENTS.clear()
     updates: list[dict[str, object]] = []
+    alert = {
+        "alertname": "rootcauser-downstream-payment-timeout",
+        "labels": {"serviceName": "demo-service", "severity": "critical"},
+    }
     monkeypatch.setattr(github_output, "get_settings", lambda: _settings())
     monkeypatch.setattr(github_output, "_write_local_issue", lambda *_args: None)
-    monkeypatch.setattr(github_output.requests, "post", lambda *_args, **_kwargs: _Response(10, "https://issue/10"))
+    monkeypatch.setattr(
+        github_output.requests,
+        "post",
+        lambda _url, **kwargs: updates.append(kwargs["json"]) or _Response(10, "https://issue/10"),
+    )
     monkeypatch.setattr(
         github_output.requests,
         "patch",
         lambda _url, **kwargs: updates.append(kwargs["json"]) or _Response(10, "https://issue/10"),
     )
-    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), {"id": "rule-a"})
-    url = github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), {"id": "rule-a"})
+    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
+    url = github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
     assert url == "https://issue/10"
-    assert "Incident Version:** 2" in str(updates[0]["body"])
+    assert "Incident Version:** 1" in str(updates[0]["body"])
+    assert "Incident Version:** 2" in str(updates[1]["body"])
 
 
-def test_new_alert_identity_creates_new_issue(monkeypatch) -> None:
+def test_resolved_then_firing_creates_new_issue_version_one(monkeypatch) -> None:
+    github_output._ACTIVE_INCIDENTS.clear()
+    created: list[dict[str, object]] = []
+    alert = {
+        "alertname": "rootcauser-downstream-payment-timeout",
+        "labels": {"serviceName": "demo-service", "severity": "critical"},
+    }
+    monkeypatch.setattr(github_output, "get_settings", lambda: _settings())
+    monkeypatch.setattr(github_output, "_write_local_issue", lambda *_args: None)
+    monkeypatch.setattr(
+        github_output.requests,
+        "post",
+        lambda _url, **kwargs: created.append(kwargs["json"]) or _Response(len(created), f"https://issue/{len(created)}"),
+    )
+    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
+    github_output.resolve_incident("svc", alert)
+    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
+    assert len(created) == 2
+    assert "Incident Version:** 1" in str(created[0]["body"])
+    assert "Incident Version:** 1" in str(created[1]["body"])
+    assert github_output._ACTIVE_INCIDENTS
+
+
+def test_different_fingerprint_creates_different_incident(monkeypatch) -> None:
     github_output._ACTIVE_INCIDENTS.clear()
     created: list[str] = []
     monkeypatch.setattr(github_output, "get_settings", lambda: _settings())
@@ -69,8 +105,16 @@ def test_new_alert_identity_creates_new_issue(monkeypatch) -> None:
         "post",
         lambda _url, **_kwargs: created.append("post") or _Response(len(created), f"https://issue/{len(created)}"),
     )
-    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), {"id": "rule-a"})
-    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), {"id": "rule-b"})
+    base = {
+        "alertname": "rootcauser-downstream-payment-timeout",
+        "labels": {"serviceName": "demo-service", "severity": "critical"},
+    }
+    variant = {
+        "alertname": "rootcauser-downstream-payment-timeout",
+        "labels": {"serviceName": "demo-service", "severity": "warning"},
+    }
+    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), base)
+    github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), variant)
     assert created == ["post", "post"]
 
 

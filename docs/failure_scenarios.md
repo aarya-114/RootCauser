@@ -7,10 +7,12 @@ RootCauser's locked MVP implements exactly 2 seeded incidents. The remaining sce
 1. Slow database query  
    Trigger: `GET /orders?inject_bug=slow_query`  
    Signals: `db.orders.slow_query` span, warning log, `db.query.duration` metric.
+   Incident behavior: repeated firings before `RESOLVED` update the same GitHub issue and increment Incident Version.
 
 2. Downstream payment API timeout  
    Trigger: `GET /orders?inject_bug=flaky_downstream`  
    Signals: `downstream.payment_api.call` error span, error log, `downstream.errors` metric.
+   Incident behavior: after a reliable `RESOLVED`, the next firing starts a new Version 1 incident issue.
 
 ## Roadmap Only
 

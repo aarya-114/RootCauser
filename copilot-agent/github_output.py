@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,19 +27,30 @@ def create_github_issue(
     bundle: EvidenceBundle,
     alert: dict[str, Any] | None = None,
 ) -> str | None:
-    """Create Version 1 or update the active issue for the same rule identity."""
+    """Create Version 1 or update the active issue for the same incident fingerprint."""
     settings = get_settings()
     alert = alert or {}
-    identity = _incident_identity(alert)
+    fingerprint = _incident_fingerprint(service_name, alert)
+    firing_time = _incident_timestamp(alert)
     with _INCIDENT_LOCK:
-        active = _ACTIVE_INCIDENTS.get(identity) if identity else None
-        version = int(active["version"]) + 1 if active else 1
+        active = _ACTIVE_INCIDENTS.get(fingerprint) if fingerprint else None
+        is_open = bool(active and active.get("status") == "OPEN")
+        version = int(active.get("version", 0)) + 1 if is_open else 1
+        opened_at = str(active.get("opened_at")) if is_open and active.get("opened_at") else _iso_now()
     title = f"[RootCauser] {service_name}: {hypothesis.confidence} root-cause hypothesis"
     body = render_issue_markdown(service_name, hypothesis, bundle, alert, version)
     _write_local_issue(title, body)
 
     if not settings.github_token or settings.github_repo == "your-org/your-repo":
-        _remember_incident(identity, version, None, None)
+        _remember_incident(
+            fingerprint,
+            version=version,
+            status="OPEN",
+            issue_number=None,
+            issue_url=None,
+            opened_at=opened_at,
+            last_firing_at=firing_time,
+        )
         return None
 
     url = f"https://api.github.com/repos/{settings.github_repo}/issues"
@@ -48,7 +61,7 @@ def create_github_issue(
     }
     payload = {"title": title, "body": body, "labels": ["rootcauser", "incident"]}
 
-    if active and active.get("issue_number") is not None:
+    if is_open and active and active.get("issue_number") is not None:
         issue_number = active["issue_number"]
         issue_url = f"{url}/{issue_number}"
         for attempt in (1, 2):
@@ -57,7 +70,15 @@ def create_github_issue(
                 response.raise_for_status()
                 updated = response.json()
                 result_url = str(updated.get("html_url") or active.get("issue_url") or "")
-                _remember_incident(identity, version, issue_number, result_url)
+                _remember_incident(
+                    fingerprint,
+                    version=version,
+                    status="OPEN",
+                    issue_number=issue_number,
+                    issue_url=result_url,
+                    opened_at=opened_at,
+                    last_firing_at=firing_time,
+                )
                 return result_url or None
             except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
                 if attempt == 1:
@@ -71,7 +92,15 @@ def create_github_issue(
             response.raise_for_status()
             created = response.json()
             result_url = str(created.get("html_url") or "")
-            _remember_incident(identity, version, created.get("number"), result_url)
+            _remember_incident(
+                fingerprint,
+                version=version,
+                status="OPEN",
+                issue_number=created.get("number"),
+                issue_url=result_url,
+                opened_at=opened_at,
+                last_firing_at=firing_time,
+            )
             return result_url or None
         except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
             if attempt == 1:
@@ -127,7 +156,7 @@ def render_issue_markdown(
 
 
 def clear_active_incident(identity: str | None) -> None:
-    """Forget the active issue when SigNoz reliably reports a resolved firing."""
+    """Legacy compatibility helper for older callers."""
     if not identity:
         return
     with _INCIDENT_LOCK:
@@ -135,24 +164,132 @@ def clear_active_incident(identity: str | None) -> None:
 
 
 def _remember_incident(
-    identity: str | None, version: int, issue_number: Any, issue_url: str | None
+    fingerprint: str | None,
+    *,
+    version: int,
+    status: str,
+    issue_number: Any,
+    issue_url: str | None,
+    opened_at: str,
+    last_firing_at: str,
 ) -> None:
-    if not identity:
+    if not fingerprint:
         return
     with _INCIDENT_LOCK:
-        _ACTIVE_INCIDENTS[identity] = {
+        existing = _ACTIVE_INCIDENTS.get(fingerprint, {})
+        _ACTIVE_INCIDENTS[fingerprint] = {
+            "fingerprint": fingerprint,
             "version": version,
+            "status": status,
             "issue_number": issue_number,
             "issue_url": issue_url,
+            "opened_at": existing.get("opened_at") or opened_at,
+            "last_firing_at": last_firing_at,
         }
 
 
-def _incident_identity(alert: dict[str, Any]) -> str | None:
+def resolve_incident(service_name: str, alert: dict[str, Any] | None = None) -> None:
+    """Mark the matching open incident as resolved so a later firing creates a new issue."""
+    alert = alert or {}
+    fingerprint = _incident_fingerprint(service_name, alert)
+    if not fingerprint:
+        return
+    with _INCIDENT_LOCK:
+        active = _ACTIVE_INCIDENTS.get(fingerprint)
+        if not active or active.get("status") != "OPEN":
+            return
+        _ACTIVE_INCIDENTS[fingerprint] = {**active, "status": "RESOLVED"}
+
+
+def _incident_fingerprint(service_name: str, alert: dict[str, Any]) -> str | None:
+    alert_name = _incident_name(alert)
+    labels = _incident_labels(alert)
+    if not service_name and not alert_name and not labels:
+        return None
+    payload = {
+        "service": service_name or "",
+        "alert_name": alert_name or "",
+        "labels": labels,
+    }
+    normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _incident_name(alert: dict[str, Any]) -> str | None:
+    for key in ("alertname", "ruleName", "name"):
+        value = alert.get(key)
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, dict):
+            nested = value.get("name")
+            if isinstance(nested, str) and nested:
+                return nested
+    alerts = alert.get("alerts")
+    if isinstance(alerts, list):
+        for item in alerts:
+            if not isinstance(item, dict):
+                continue
+            labels = item.get("labels")
+            if not isinstance(labels, dict):
+                continue
+            for key in ("alertname", "alertName", "ruleName", "rule_name"):
+                value = labels.get(key)
+                if isinstance(value, str) and value:
+                    return value
+    return None
+
+
+def _incident_labels(alert: dict[str, Any]) -> dict[str, Any]:
+    labels: dict[str, Any] = {}
+    direct_labels = alert.get("labels")
+    if isinstance(direct_labels, dict):
+        labels.update(_normalize_mapping(direct_labels))
+    alerts = alert.get("alerts")
+    if isinstance(alerts, list):
+        for item in alerts:
+            if not isinstance(item, dict):
+                continue
+            nested_labels = item.get("labels")
+            if isinstance(nested_labels, dict):
+                labels.update(_normalize_mapping(nested_labels))
     for key in ("_incident_identity", "ruleId", "rule_id", "alertId", "id"):
         value = alert.get(key)
-        if value:
-            return str(value)
-    return None
+        if value not in (None, ""):
+            labels[key] = _normalize_value(value)
+    for key in ("groupLabels", "commonLabels"):
+        value = alert.get(key)
+        if isinstance(value, dict):
+            labels[key] = _normalize_mapping(value)
+    return dict(sorted(labels.items()))
+
+
+def _normalize_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    return {str(key): _normalize_value(child) for key, child in sorted(value.items(), key=lambda item: str(item[0]))}
+
+
+def _normalize_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return _normalize_mapping(value)
+    if isinstance(value, list):
+        return [_normalize_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _incident_timestamp(alert: dict[str, Any]) -> str:
+    for key in ("startsAt", "triggeredAt", "time", "timestamp", "endsAt"):
+        value = alert.get(key)
+        parsed = _parse_timestamp(value)
+        if parsed is not None:
+            return parsed.isoformat().replace("+00:00", "Z")
+    return _iso_now()
+
+
+def _iso_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
@@ -162,7 +299,7 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
     ]
     metric_series = [series for series in bundle.metrics if series.points]
     summary_rows = [
-        ("Traces", _trace_observation(bundle), _relevance(bundle.spans)),
+        ("Traces", _trace_observation(bundle), _relevance(bundle.spans, bundle=bundle, is_traces=True)),
         ("Logs", _log_observation(bundle.logs), _relevance(bundle.logs)),
         ("Metrics", _metric_observation(metric_series), _relevance(metric_series)),
         (
@@ -174,7 +311,7 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
         ),
     ]
     evidence_summary = "\n".join(
-        ["| Evidence | Observation | Relevance |", "|---|---|---|"]
+        ["| Evidence | Observation | Relevance |", "| --- | --- | --- |"]
         + [f"| {kind} | {observation} | {relevance} |" for kind, observation, relevance in summary_rows]
     )
 
@@ -216,15 +353,19 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
         + [f"- {item}" for item in missing]
     )
 
-    coverage_rows = [
-        ("Traces", bool(bundle.spans)),
-        ("Logs", bool(bundle.logs)),
-        ("Metrics", bool(metric_series)),
-        ("Trace/log correlation", bool(correlated_logs)),
+    # Coverage: Available = traces were retrieved (even if not relevant); Used = selected for evidence.
+    coverage_rows_ext = [
+        ("Traces", bundle.traces_available > 0, bool(bundle.spans)),
+        ("Logs", bool(bundle.logs), bool(bundle.logs)),
+        ("Metrics", bool(metric_series), bool(metric_series)),
+        ("Trace/log correlation", bool(correlated_logs), bool(correlated_logs)),
     ]
     evidence_coverage = "\n".join(
-        ["| Signal | Available | Used |", "|---|---:|---:|"]
-        + [f"| {name} | {'✓' if available else '—'} | {'✓' if available else '—'} |" for name, available in coverage_rows]
+        ["| Signal | Available | Used |", "| --- | ---: | ---: |"]
+        + [
+            f"| {name} | {'✓' if avail else '—'} | {'✓' if used else '—'} |"
+            for name, avail, used in coverage_rows_ext
+        ]
     )
     return {
         "evidence_summary": evidence_summary,
@@ -237,7 +378,12 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
 
 def _trace_observation(bundle: EvidenceBundle) -> str:
     if not bundle.spans:
-        return "No selected traces"
+        if bundle.traces_available > 0:
+            return (
+                f"{bundle.traces_available} trace(s) retrieved, "
+                "0 relevant/supporting (no semantic match, error, or log correlation)"
+            )
+        return "No traces retrieved"
     names = ", ".join(f"`{name}`" for name in sorted({span.name for span in bundle.spans}))
     durations = [span.duration_ms for span in bundle.spans]
     return f"{len(bundle.spans)} selected spans ({names}); duration {min(durations):g}–{max(durations):g} ms"
@@ -260,7 +406,12 @@ def _metric_observation(series: list[Any]) -> str:
     return ", ".join(observations)
 
 
-def _relevance(items: list[Any]) -> str:
+def _relevance(items: list[Any], bundle: EvidenceBundle | None = None, is_traces: bool = False) -> str:
+    if is_traces and bundle is not None:
+        if not bundle.spans and bundle.traces_available > 0:
+            return "Not relevant"
+        if not bundle.spans:
+            return "Unavailable"
     scores = [getattr(item, "relevance_score", 0) for item in items]
     if not items:
         return "Unavailable"
@@ -284,7 +435,7 @@ def _timeline(bundle: EvidenceBundle, metric_series: list[Any]) -> str:
             events.append((timestamp, f"Metric `{series.name}` value {point.value:g}"))
     if not events:
         return ""
-    rows = ["| Time | Evidence |", "|---|---|"]
+    rows = ["| Time | Evidence |", "| --- | --- |"]
     for timestamp, description in sorted(events)[:8]:
         rows.append(f"| {timestamp.isoformat().replace('+00:00', 'Z')} | {description} |")
     return "\n".join(rows)

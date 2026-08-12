@@ -48,6 +48,9 @@ class EvidenceBundle(BaseModel):
     spans: list[SpanEvidence] = Field(default_factory=list)
     logs: list[LogEvidence] = Field(default_factory=list)
     metrics: list[MetricSeries] = Field(default_factory=list)
+    # Counts of raw trace records retrieved before relevance filtering.
+    traces_available: int = 0
+    traces_relevant: int = 0
 
     def is_empty(self) -> bool:
         return (
@@ -87,7 +90,19 @@ def build_evidence_bundle(
             log_trace_ids, log_span_ids, trace_counts,
         )
         candidates.append(span)
-    spans = _select_diverse_spans(candidates)
+
+    traces_available = len(candidates)
+
+    # Only promote spans that are genuinely supporting: they must have a
+    # positive relevance score, be an error span, or be correlated with a log.
+    # This prevents routine/health/uncorrelated spans from appearing as
+    # supporting evidence when they have nothing to do with the incident.
+    supporting_candidates = [
+        span for span in candidates if _is_supporting_span(span, log_trace_ids, log_span_ids)
+    ]
+    spans = _select_diverse_spans(supporting_candidates)
+    traces_relevant = len(spans)
+
     selected_trace_ids = {span.trace_id for span in spans if span.trace_id}
     selected_span_ids = {span.span_id for span in spans if span.span_id}
     for log in normalized_logs:
@@ -102,6 +117,8 @@ def build_evidence_bundle(
         spans=spans,
         logs=ranked_logs,
         metrics=metric_series,
+        traces_available=traces_available,
+        traces_relevant=traces_relevant,
     )
 
 
@@ -449,6 +466,35 @@ def _span_score(
         score += proximity
         reasons.append("near alert time")
     return score, reasons
+
+
+def _is_supporting_span(
+    span: SpanEvidence,
+    log_trace_ids: set[str],
+    log_span_ids: set[str],
+) -> bool:
+    """Return True when the span provides genuine incident evidence.
+
+    A span is supporting when at least one of the following holds:
+    - It has a positive relevance score (semantic match, service match,
+      alert-time proximity, multi-span trace, or any other positive signal).
+    - It is an error span regardless of other signals.
+    - Its span_id or trace_id is correlated with a log record.
+
+    A span that is only present due to duration and has no connection to
+    the incident (e.g. GET /health, an uncorrelated long-running span) is
+    excluded so that merely having trace telemetry does not count as
+    supporting evidence.
+    """
+    if span.relevance_score > 0:
+        return True
+    if span.is_error:
+        return True
+    if span.span_id and span.span_id in log_span_ids:
+        return True
+    if span.trace_id and span.trace_id in log_trace_ids:
+        return True
+    return False
 
 
 def _select_diverse_spans(spans: list[SpanEvidence]) -> list[SpanEvidence]:

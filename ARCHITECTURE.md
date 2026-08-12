@@ -7,7 +7,7 @@ SigNoz Alert → FastAPI Webhook → Evidence Retrieval → Deterministic Rankin
 
 `demo-service` emits OpenTelemetry traces, logs, and metrics through the collector to SigNoz. SigNoz alerts call `copilot-agent/main.py` at `POST /webhook/alert`.
 
-The webhook extracts the service and incident window. Real SigNoz payloads can provide the rule UUID at `alerts[0].labels.ruleId`; RootCauser resolves it through `GET /api/v2/rules/{uuid}`. Evidence retrieval uses `POST /api/v5/query_range` for traces, logs, and metrics.
+The webhook extracts the service and incident window. Real SigNoz payloads can provide the rule UUID at `alerts[0].labels.ruleId`; RootCauser uses that UUID to resolve the full rule with `GET /api/v2/rules/{uuid}` and then preserves the firing alert name for reporting. Evidence retrieval uses `POST /api/v5/query_range` for traces, logs, and metrics.
 
 ## Deterministic evidence before reasoning
 
@@ -27,4 +27,4 @@ Traces, logs, and metrics are independent sources. Metric queries use SigNoz v5 
 
 ## Active incident versioning
 
-`github_output.py` keeps a process-local active-incident map keyed by the reliable SigNoz rule/alert ID supplied by `main.py`. The first firing creates Version 1; repeated active firings PATCH the same GitHub issue and increment the version. When a webhook explicitly reports `RESOLVED`, `main.py` clears that key so a later firing creates a new issue. This state is intentionally not persistent: an agent restart, missing stable identity, or a webhook without a reliable resolved state can result in a new Version 1 issue.
+`github_output.py` keeps a process-local active-incident map keyed by a deterministic fingerprint derived from the service, alert name, and normalized labels supplied by `main.py`. The first firing creates Version 1; repeated active firings PATCH the same GitHub issue and increment the version. When a webhook explicitly reports `RESOLVED`, `main.py` marks that fingerprint as resolved so a later firing creates a new issue. This state is intentionally not persistent: an agent restart, missing stable fingerprint, or a webhook without a reliable resolved state can result in a new Version 1 issue.

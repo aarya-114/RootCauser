@@ -91,3 +91,73 @@ def test_timeline_is_chronological_and_issue_keeps_raw_bundle() -> None:
     assert "### Evidence Coverage" in report
     assert "### Raw Evidence Bundle" in report
     assert '"trace_id": "trace-1"' in report
+
+
+# ---------------------------------------------------------------------------
+# New focused tests (Task 2 requirements)
+# ---------------------------------------------------------------------------
+
+def test_markdown_tables_are_valid_github_format() -> None:
+    """All Markdown tables in the report must use '| --- |' separator style.
+    The compact '|---|' style (no spaces around dashes) can cause rendering
+    issues in some GitHub contexts and should not appear in the output."""
+    facts = build_report_facts(_bundle())
+    for key in ("evidence_summary", "evidence_coverage", "timeline"):
+        content = facts[key]
+        if not content:
+            continue
+        # Must contain properly spaced separator cells
+        assert "| --- |" in content or "| ---:" in content, (
+            f"{key} missing valid Markdown table separator (| --- |)"
+        )
+        # Must NOT contain separator without spaces
+        lines = content.splitlines()
+        separator_lines = [ln for ln in lines if ln.strip().startswith("|") and "---" in ln]
+        for ln in separator_lines:
+            # Verify each cell in the separator has at least one space around dashes
+            cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+            for cell in cells:
+                if cell:  # skip empty border cells
+                    assert cell.startswith("-") or cell.startswith(" ") or ":" in cell, (
+                        f"Separator cell '{cell}' in {key} does not use spaced separator"
+                    )
+
+
+def test_irrelevant_traces_show_as_available_not_supporting() -> None:
+    """When traces were retrieved but none qualified as relevant/supporting,
+    the Evidence Summary must show them as retrieved but 0 relevant,
+    the Relevance column must say 'Not relevant',
+    and the Coverage table must show Available=✓ but Used=— for Traces."""
+    # Bundle with no selected spans but traces_available = 2
+    bundle = EvidenceBundle(
+        spans=[],
+        logs=[
+            LogEvidence(
+                timestamp="2026-08-10T22:35:10Z",
+                severity="ERROR",
+                body="service error",
+                relevance_score=30,
+                relevance_reasons=["ERROR severity"],
+            )
+        ],
+        metrics=[],
+        traces_available=2,
+        traces_relevant=0,
+    )
+    facts = build_report_facts(bundle)
+
+    # Evidence Summary: observation mentions retrieved count
+    assert "2 trace(s) retrieved" in facts["evidence_summary"]
+    assert "0 relevant" in facts["evidence_summary"]
+    # Relevance column for traces shows Not relevant
+    assert "Not relevant" in facts["evidence_summary"]
+
+    # Coverage table: Traces Available=✓ (were retrieved), Used=— (not selected)
+    assert "✓" in facts["evidence_coverage"]  # traces available
+    # The Traces row: available but not used
+    coverage_lines = facts["evidence_coverage"].splitlines()
+    trace_row = next((ln for ln in coverage_lines if ln.startswith("| Traces")), "")
+    assert trace_row, "Traces row missing from coverage table"
+    # The row should have ✓ for Available column and — for Used column
+    assert "✓" in trace_row
+    assert "—" in trace_row
