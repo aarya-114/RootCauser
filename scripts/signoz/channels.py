@@ -34,9 +34,7 @@ class ChannelManager:
         self,
         channel_id: str,
     ) -> dict[str, Any]:
-        response = self.client.get(
-            f"/api/v2/notificationChannels/{channel_id}"
-        )
+        response = self.client.get(f"/api/v2/notificationChannels/{channel_id}")
 
         response.raise_for_status()
 

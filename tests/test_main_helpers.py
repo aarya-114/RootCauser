@@ -35,11 +35,7 @@ def test_nested_webhook_rule_id_aliases_are_supported() -> None:
 
 
 def test_webhook_alert_name_is_preserved_for_output_context() -> None:
-    payload = {
-        "alerts": [
-            {"labels": {"alertname": "rootcauser-downstream-payment-timeout"}}
-        ]
-    }
+    payload = {"alerts": [{"labels": {"alertname": "rootcauser-downstream-payment-timeout"}}]}
     context = _preserve_webhook_alert_name({"name": "rule metadata"}, payload)
     assert context["alertname"] == "rootcauser-downstream-payment-timeout"
 
@@ -71,5 +67,11 @@ def test_alert_rule_metric_takes_precedence() -> None:
 def test_incident_context_includes_composite_query_semantics() -> None:
     from datetime import UTC, datetime
 
-    context = _incident_context({}, {"compositeQuery": {"filter": "database timeout"}}, "metric.name", "svc", datetime.now(UTC))
+    context = _incident_context(
+        {},
+        {"compositeQuery": {"filter": "database timeout"}},
+        "metric.name",
+        "svc",
+        datetime.now(UTC),
+    )
     assert "database timeout" in context["semantic_terms"]

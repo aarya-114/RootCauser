@@ -58,7 +58,9 @@ def _bundle() -> EvidenceBundle:
 
 def test_report_facts_summarize_actual_evidence_and_chain() -> None:
     facts = build_report_facts(_bundle())
-    assert "1 selected spans (`dependency call`); duration 1500–1500 ms" in facts["evidence_summary"]
+    assert (
+        "1 selected spans (`dependency call`); duration 1500–1500 ms" in facts["evidence_summary"]
+    )
     assert "1 selected logs with severity ERROR" in facts["evidence_summary"]
     assert "`dependency.errors` 131 → 161" in facts["evidence_summary"]
     assert "logs matched selected trace/span IDs" in facts["evidence_summary"]
@@ -96,6 +98,7 @@ def test_timeline_is_chronological_and_issue_keeps_raw_bundle() -> None:
 # ---------------------------------------------------------------------------
 # New focused tests (Task 2 requirements)
 # ---------------------------------------------------------------------------
+
 
 def test_markdown_tables_are_valid_github_format() -> None:
     """All Markdown tables in the report must use '| --- |' separator style.

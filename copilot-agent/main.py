@@ -106,7 +106,10 @@ def process_alert(payload: dict[str, Any]) -> None:
     if alert_status == "RESOLVED":
         resolve_incident(service_name, alert_details)
         logger.info(
-            "Resolved alert marked closed for incident fingerprint: service=%s alert=%s alert_id=%s",
+            (
+                "Resolved alert marked closed for incident fingerprint: "
+                "service=%s alert=%s alert_id=%s"
+            ),
             service_name,
             _alert_name(alert_details, payload),
             alert_id,
@@ -446,7 +449,9 @@ def _extract_alert_id(
 
 
 def _extract_alert_status(payload: dict[str, Any]) -> str | None:
-    for source in [payload] + [item for item in payload.get("alerts", []) if isinstance(item, dict)]:
+    for source in [payload] + [
+        item for item in payload.get("alerts", []) if isinstance(item, dict)
+    ]:
         for key in ("status", "state", "alertState"):
             value = source.get(key)
             if isinstance(value, str) and value.upper() in {"FIRING", "RESOLVED"}:

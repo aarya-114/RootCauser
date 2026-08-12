@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+
 from scripts.signoz.alerts import AlertManager
 from scripts.signoz.specs import (
     AlertSpec,
@@ -5,9 +7,9 @@ from scripts.signoz.specs import (
     MetricAggregation,
     MetricQuery,
 )
-from dotenv import load_dotenv 
 
-load_dotenv()    
+load_dotenv()
+
 
 def build_slow_query_alert() -> AlertSpec:
     return AlertSpec(
@@ -40,15 +42,9 @@ def main() -> None:
 
     alert_spec = build_slow_query_alert()
 
-    result = alert_manager.ensure_alert(
-        alert_spec.to_payload()
-    )
+    result = alert_manager.ensure_alert(alert_spec.to_payload())
 
-    print(
-        f"RESULT: {result['id']} "
-        f"{result['alert']} "
-        f"{result['state']}"
-    )
+    print(f"RESULT: {result['id']} {result['alert']} {result['state']}")
 
 
 if __name__ == "__main__":

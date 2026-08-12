@@ -124,9 +124,7 @@ def test_invalid_citation_has_distinct_status() -> None:
 def test_unqualified_timeout_increase_is_not_presented_as_root_fix() -> None:
     bundle = EvidenceBundle(
         spans=[
-            SpanEvidence(
-                trace_id="trace", span_id="span", name="payment call", duration_ms=1500
-            )
+            SpanEvidence(trace_id="trace", span_id="span", name="payment call", duration_ms=1500)
         ],
         logs=[
             LogEvidence(
@@ -147,5 +145,7 @@ def test_unqualified_timeout_increase_is_not_presented_as_root_fix() -> None:
         }
     )
     hypothesis = parse_and_validate_hypothesis(response, bundle)
-    assert "Investigate the downstream dependency latency/root cause first" in hypothesis.suggested_fix
+    assert (
+        "Investigate the downstream dependency latency/root cause first" in hypothesis.suggested_fix
+    )
     assert "only as a mitigation" in hypothesis.suggested_fix

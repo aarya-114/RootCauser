@@ -123,7 +123,8 @@ def query_logs(
     filters = [f"service.name = '{service_name}'"]
     if severity:
         logger.info(
-            "SigNoz log severity filter omitted because this deployment does not support JSON* extraction"
+            "SigNoz log severity filter omitted because this deployment "
+            "does not support JSON* extraction"
         )
     payload = _raw_payload(
         "logs",
@@ -138,9 +139,7 @@ def query_logs(
     try:
         rows = _extract_list(_post_with_retry(_QUERY_RANGE_URL, payload), "logs")
     except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
-        logger.warning(
-            "SigNoz log query failed; continuing investigation without logs: %s", exc
-        )
+        logger.warning("SigNoz log query failed; continuing investigation without logs: %s", exc)
         return []
     normalized = [_normalize_log(row) for row in rows]
     logger.info(

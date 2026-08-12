@@ -86,8 +86,15 @@ def build_evidence_bundle(
     for raw in traces or []:
         span = _span_from_raw(raw)
         span.relevance_score, span.relevance_reasons = _span_score(
-            span, raw, keywords, alert_time, expected_service, health_alert,
-            log_trace_ids, log_span_ids, trace_counts,
+            span,
+            raw,
+            keywords,
+            alert_time,
+            expected_service,
+            health_alert,
+            log_trace_ids,
+            log_span_ids,
+            trace_counts,
         )
         candidates.append(span)
 
@@ -109,7 +116,11 @@ def build_evidence_bundle(
         log.relevance_score, log.relevance_reasons = _log_score(
             log, selected_trace_ids, selected_span_ids, alert_time
         )
-    ranked_logs = sorted(normalized_logs, key=lambda log: (log.relevance_score, str(log.timestamp)), reverse=True)[:5]
+    ranked_logs = sorted(
+        normalized_logs,
+        key=lambda log: (log.relevance_score, str(log.timestamp)),
+        reverse=True,
+    )[:5]
 
     metric_series = [_metric_from_raw(metric) for metric in metrics or []]
 
@@ -501,7 +512,11 @@ def _select_diverse_spans(spans: list[SpanEvidence]) -> list[SpanEvidence]:
     selected: list[SpanEvidence] = []
     seen: set[tuple[str, str, str, float]] = set()
     per_trace: dict[str, int] = {}
-    for span in sorted(spans, key=lambda item: (item.relevance_score, item.duration_ms), reverse=True):
+    for span in sorted(
+        spans,
+        key=lambda item: (item.relevance_score, item.duration_ms),
+        reverse=True,
+    ):
         signature = (span.trace_id, span.span_id, span.name, span.duration_ms)
         if signature in seen or per_trace.get(span.trace_id, 0) >= 2:
             continue
@@ -540,9 +555,7 @@ def _parse_timestamp(value: Any) -> datetime | None:
     try:
         if isinstance(value, (int, float)) or str(value).isdigit():
             numeric = float(value)
-            return datetime.fromtimestamp(
-                numeric / 1000 if numeric > 1e12 else numeric, tz=UTC
-            )
+            return datetime.fromtimestamp(numeric / 1000 if numeric > 1e12 else numeric, tz=UTC)
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError, OSError):
         return None

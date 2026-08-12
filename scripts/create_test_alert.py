@@ -13,15 +13,11 @@ def main():
         queries=[
             MetricQuery(
                 name="A",
-                aggregation=MetricAggregation(
-                    metric_name="db.query.duration.sum"
-                ),
+                aggregation=MetricAggregation(metric_name="db.query.duration.sum"),
             ),
             MetricQuery(
                 name="B",
-                aggregation=MetricAggregation(
-                    metric_name="db.query.duration.count"
-                ),
+                aggregation=MetricAggregation(metric_name="db.query.duration.count"),
             ),
             FormulaQuery(
                 name="F1",

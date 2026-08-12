@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -38,44 +38,47 @@ class AlertSpec:
     def _selected_query_name(self) -> str:
         return self.queries[-1].name
 
-
     def to_payload(self) -> dict[str, Any]:
         queries = []
 
         for query in self.queries:
             if isinstance(query, MetricQuery):
-                queries.append({
-                    "type": "builder_query",
-                    "spec": {
-                        "name": query.name,
-                        "signal": "metrics",
-                        "source": "",
-                        "aggregations": [
-                            {
-                                "metricName": query.aggregation.metric_name,
-                                "temporality": query.aggregation.temporality,
-                                "timeAggregation": query.aggregation.time_aggregation,
-                                "spaceAggregation": query.aggregation.space_aggregation,
-                            }
-                        ],
-                        "disabled": False,
-                        "filter": {
-                            "expression": query.filter_expression,
+                queries.append(
+                    {
+                        "type": "builder_query",
+                        "spec": {
+                            "name": query.name,
+                            "signal": "metrics",
+                            "source": "",
+                            "aggregations": [
+                                {
+                                    "metricName": query.aggregation.metric_name,
+                                    "temporality": query.aggregation.temporality,
+                                    "timeAggregation": query.aggregation.time_aggregation,
+                                    "spaceAggregation": query.aggregation.space_aggregation,
+                                }
+                            ],
+                            "disabled": False,
+                            "filter": {
+                                "expression": query.filter_expression,
+                            },
+                            "legend": "",
                         },
-                        "legend": "",
-                    },
-                })
+                    }
+                )
 
             elif isinstance(query, FormulaQuery):
-                queries.append({
-                    "type": "builder_formula",
-                    "spec": {
-                        "name": query.name,
-                        "expression": query.expression,
-                        "disabled": False,
-                        "legend": "",
-                    },
-                })
+                queries.append(
+                    {
+                        "type": "builder_formula",
+                        "spec": {
+                            "name": query.name,
+                            "expression": query.expression,
+                            "disabled": False,
+                            "legend": "",
+                        },
+                    }
+                )
 
         return {
             "alert": self.name,

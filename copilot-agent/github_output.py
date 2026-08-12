@@ -36,7 +36,9 @@ def create_github_issue(
         active = _ACTIVE_INCIDENTS.get(fingerprint) if fingerprint else None
         is_open = bool(active and active.get("status") == "OPEN")
         version = int(active.get("version", 0)) + 1 if is_open else 1
-        opened_at = str(active.get("opened_at")) if is_open and active.get("opened_at") else _iso_now()
+        opened_at = (
+            str(active.get("opened_at")) if is_open and active.get("opened_at") else _iso_now()
+        )
     title = f"[RootCauser] {service_name}: {hypothesis.confidence} root-cause hypothesis"
     body = render_issue_markdown(service_name, hypothesis, bundle, alert, version)
     _write_local_issue(title, body)
@@ -264,7 +266,10 @@ def _incident_labels(alert: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    return {str(key): _normalize_value(child) for key, child in sorted(value.items(), key=lambda item: str(item[0]))}
+    return {
+        str(key): _normalize_value(child)
+        for key, child in sorted(value.items(), key=lambda item: str(item[0]))
+    }
 
 
 def _normalize_value(value: Any) -> Any:
@@ -299,7 +304,11 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
     ]
     metric_series = [series for series in bundle.metrics if series.points]
     summary_rows = [
-        ("Traces", _trace_observation(bundle), _relevance(bundle.spans, bundle=bundle, is_traces=True)),
+        (
+            "Traces",
+            _trace_observation(bundle),
+            _relevance(bundle.spans, bundle=bundle, is_traces=True),
+        ),
         ("Logs", _log_observation(bundle.logs), _relevance(bundle.logs)),
         ("Metrics", _metric_observation(metric_series), _relevance(metric_series)),
         (
@@ -312,7 +321,10 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
     ]
     evidence_summary = "\n".join(
         ["| Evidence | Observation | Relevance |", "| --- | --- | --- |"]
-        + [f"| {kind} | {observation} | {relevance} |" for kind, observation, relevance in summary_rows]
+        + [
+            f"| {kind} | {observation} | {relevance} |"
+            for kind, observation, relevance in summary_rows
+        ]
     )
 
     chain: list[str] = []
@@ -323,7 +335,9 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
     if metric_series:
         chain.append(_metric_observation(metric_series))
     if correlated_logs:
-        chain.append(f"{len(correlated_logs)} selected logs share trace or span IDs with selected spans")
+        chain.append(
+            f"{len(correlated_logs)} selected logs share trace or span IDs with selected spans"
+        )
     if not chain:
         chain.append("No usable telemetry evidence was selected")
     evidence_chain = "\n".join(f"{index}. {fact}." for index, fact in enumerate(chain, 1))
@@ -353,7 +367,8 @@ def build_report_facts(bundle: EvidenceBundle) -> dict[str, str]:
         + [f"- {item}" for item in missing]
     )
 
-    # Coverage: Available = traces were retrieved (even if not relevant); Used = selected for evidence.
+    # Coverage: Available = traces were retrieved (even if not relevant);
+    # Used = selected for evidence.
     coverage_rows_ext = [
         ("Traces", bundle.traces_available > 0, bool(bundle.spans)),
         ("Logs", bool(bundle.logs), bool(bundle.logs)),
@@ -386,7 +401,10 @@ def _trace_observation(bundle: EvidenceBundle) -> str:
         return "No traces retrieved"
     names = ", ".join(f"`{name}`" for name in sorted({span.name for span in bundle.spans}))
     durations = [span.duration_ms for span in bundle.spans]
-    return f"{len(bundle.spans)} selected spans ({names}); duration {min(durations):g}–{max(durations):g} ms"
+    return (
+        f"{len(bundle.spans)} selected spans ({names}); duration "
+        f"{min(durations):g}–{max(durations):g} ms"
+    )
 
 
 def _log_observation(logs: list[Any]) -> str:
@@ -406,7 +424,9 @@ def _metric_observation(series: list[Any]) -> str:
     return ", ".join(observations)
 
 
-def _relevance(items: list[Any], bundle: EvidenceBundle | None = None, is_traces: bool = False) -> str:
+def _relevance(
+    items: list[Any], bundle: EvidenceBundle | None = None, is_traces: bool = False
+) -> str:
     if is_traces and bundle is not None:
         if not bundle.spans and bundle.traces_available > 0:
             return "Not relevant"

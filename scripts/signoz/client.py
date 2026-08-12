@@ -10,10 +10,12 @@ class SignozClient:
         self.api_key = os.environ["SIGNOZ_API_KEY"]
 
         self.session = requests.Session()
-        self.session.headers.update({
-            "SIGNOZ-API-KEY": self.api_key,
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "SIGNOZ-API-KEY": self.api_key,
+                "Content-Type": "application/json",
+            }
+        )
 
     def request(
         self,
@@ -31,10 +33,7 @@ class SignozClient:
         )
 
         if not response.ok:
-            raise RuntimeError(
-                f"SigNoz API error: {response.status_code} "
-                f"{response.text}"
-            )
+            raise RuntimeError(f"SigNoz API error: {response.status_code} {response.text}")
 
         return response
 

@@ -84,7 +84,10 @@ def test_resolved_then_firing_creates_new_issue_version_one(monkeypatch) -> None
     monkeypatch.setattr(
         github_output.requests,
         "post",
-        lambda _url, **kwargs: created.append(kwargs["json"]) or _Response(len(created), f"https://issue/{len(created)}"),
+        lambda _url, **kwargs: (
+            created.append(kwargs["json"])
+            or _Response(len(created), f"https://issue/{len(created)}")
+        ),
     )
     github_output.create_github_issue("svc", _hypothesis(), EvidenceBundle(), alert)
     github_output.resolve_incident("svc", alert)
@@ -103,7 +106,9 @@ def test_different_fingerprint_creates_different_incident(monkeypatch) -> None:
     monkeypatch.setattr(
         github_output.requests,
         "post",
-        lambda _url, **_kwargs: created.append("post") or _Response(len(created), f"https://issue/{len(created)}"),
+        lambda _url, **_kwargs: (
+            created.append("post") or _Response(len(created), f"https://issue/{len(created)}")
+        ),
     )
     base = {
         "alertname": "rootcauser-downstream-payment-timeout",

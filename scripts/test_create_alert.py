@@ -1,7 +1,7 @@
 import json
 import os
-import requests
 
+import requests
 
 BASE_URL = os.getenv("SIGNOZ_BASE_URL", "http://localhost:8080")
 API_KEY = os.environ["SIGNOZ_API_KEY"]
@@ -16,7 +16,6 @@ payload = {
     "alert": "slow-api-test-2",
     "alertType": "METRIC_BASED_ALERT",
     "ruleType": "threshold_rule",
-
     "condition": {
         "compositeQuery": {
             "queries": [
@@ -35,9 +34,7 @@ payload = {
                             }
                         ],
                         "disabled": False,
-                        "filter": {
-                            "expression": ""
-                        },
+                        "filter": {"expression": ""},
                         "legend": "",
                     },
                 },
@@ -56,9 +53,7 @@ payload = {
                             }
                         ],
                         "disabled": False,
-                        "filter": {
-                            "expression": ""
-                        },
+                        "filter": {"expression": ""},
                         "legend": "",
                     },
                 },
@@ -76,9 +71,7 @@ payload = {
             "queryType": "builder",
             "unit": "ms",
         },
-
         "selectedQueryName": "A",
-
         "thresholds": {
             "kind": "basic",
             "spec": [
@@ -89,27 +82,17 @@ payload = {
                     "recoveryTarget": None,
                     "matchType": "at_least_once",
                     "op": "above",
-                    "channels": [
-                        "RootCauser Webhook"
-                    ],
+                    "channels": ["RootCauser Webhook"],
                 }
             ],
         },
     },
-
     "annotations": {
-        "description": (
-            "RootCauser test alert for slow database queries."
-        ),
-        "summary": (
-            "RootCauser test alert for slow database queries."
-        ),
+        "description": ("RootCauser test alert for slow database queries."),
+        "summary": ("RootCauser test alert for slow database queries."),
     },
-
     "disabled": False,
-
     "version": "v5",
-
     "evaluation": {
         "kind": "rolling",
         "spec": {
@@ -117,9 +100,7 @@ payload = {
             "frequency": "1m",
         },
     },
-
     "schemaVersion": "v2alpha1",
-
     "notificationSettings": {
         "groupBy": [],
         "renotify": {

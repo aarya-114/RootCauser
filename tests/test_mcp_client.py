@@ -76,9 +76,7 @@ def test_extracts_current_v5_aggregation_metric_shape() -> None:
                                 "series": [
                                     {
                                         "labels": {"route": "/orders"},
-                                        "values": [
-                                            {"timestamp": 1786378920000, "value": 2000.171}
-                                        ],
+                                        "values": [{"timestamp": 1786378920000, "value": 2000.171}],
                                     }
                                 ],
                             }
@@ -129,7 +127,9 @@ def test_valid_downstream_metric_is_included_in_evidence_bundle(monkeypatch) -> 
 
 def test_metric_series_and_points_are_bounded() -> None:
     raw = {"values": [[index, index] for index in range(mcp_client.MAX_METRIC_POINTS + 1)]}
-    assert len(mcp_client._normalize_series(raw, "metric")["points"]) == mcp_client.MAX_METRIC_POINTS
+    assert (
+        len(mcp_client._normalize_series(raw, "metric")["points"]) == mcp_client.MAX_METRIC_POINTS
+    )
     response = {
         "data": {
             "data": {
@@ -146,7 +146,10 @@ def test_metric_series_and_points_are_bounded() -> None:
     original = mcp_client._post_with_retry
     mcp_client._post_with_retry = lambda *_args: monkeypatch_response
     try:
-        assert len(mcp_client.query_metrics("demo-service", "metric", 1, 2)) == mcp_client.MAX_METRIC_SERIES
+        assert (
+            len(mcp_client.query_metrics("demo-service", "metric", 1, 2))
+            == mcp_client.MAX_METRIC_SERIES
+        )
     finally:
         mcp_client._post_with_retry = original
 
