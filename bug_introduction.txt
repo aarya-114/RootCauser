@@ -1,2 +1,0 @@
-localhost:<PORT>/orders?inject_bug=slow_query
-localhost:<PORT>/orders?inject_bug=flaky_downstream
